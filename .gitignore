@@ -1,0 +1,10 @@
+# Local build output and CMake state.
+build/
+CMakeUserPresets.json
+flatpak-build/
+flatpak-repo/
+.flatpak-builder/
+
+# IDE state.
+.idea/
+.vscode/

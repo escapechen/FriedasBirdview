@@ -1,0 +1,92 @@
+name: Publish Flatpak bundle
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build and publish, for example v1.0.0
+        required: true
+        type: string
+
+# The build only reads the checkout.  The separate release job receives the
+# minimum additional permission required to create or update a GitHub Release.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build x86_64 Flatpak bundle
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
+      options: --privileged
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Build Flatpak
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: packaging/flatpak/io.github.escapechen.friedasbirdview.yml
+          bundle: friedasbirdview-x86_64.flatpak
+          repository-url: https://dl.flathub.org/repo/flathub.flatpakrepo
+          cache-key: flatpak-builder-${{ github.sha }}
+          # Upload explicitly below. This avoids relying on the builder
+          # action's bundled artifact client, whose artifact was absent in
+          # some GitHub-hosted runs.
+          upload-artifact: false
+
+      - name: Upload Flatpak bundle for the release job
+        uses: actions/upload-artifact@v7
+        with:
+          name: friedasbirdview-flatpak-x86_64
+          path: friedasbirdview-x86_64.flatpak
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Attach bundle to GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Download Flatpak bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: friedasbirdview-flatpak-x86_64
+          path: release-assets
+
+      - name: Generate checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle_count=$(find release-assets -maxdepth 1 -type f -name '*.flatpak' | wc -l)
+          test "$bundle_count" -eq 1
+          (
+            cd release-assets
+            sha256sum *.flatpak > SHA256SUMS
+          )
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/*.flatpak release-assets/SHA256SUMS --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/*.flatpak release-assets/SHA256SUMS \
+              --verify-tag \
+              --title "FriedasBirdview ${RELEASE_TAG#v}" \
+              --generate-notes
+          fi

@@ -1,0 +1,2 @@
+Checks: '-*,clang-analyzer-*,bugprone-*,performance-*,-bugprone-easily-swappable-parameters,-bugprone-invalid-enum-default-initialization,-bugprone-throwing-static-initialization,-performance-enum-size'
+HeaderFilterRegex: '(^|/)src/.*'

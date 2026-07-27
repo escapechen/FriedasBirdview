@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>@FRIEDASBIRDVIEW_APPLICATION_ID@</id>
+  <name>FriedasBirdview</name>
+  <summary>Show a Frigate camera feed for the activity that matters</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.escapechen">
+    <name>FriedasBirdview contributors</name>
+  </developer>
+  <description>
+    <p>
+      FriedasBirdview monitors Frigate events and review activity from the
+      system tray. It opens a temporary, non-activating camera feed when a
+      selected classification is detected.
+    </p>
+    <p>
+      It supports JPEG snapshots, low-latency go2rtc MSE streams, optional
+      sound alerts, cooldowns, custom certificate authorities, and KDE Wallet
+      password storage.
+    </p>
+  </description>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Video</category>
+    <category>Monitor</category>
+  </categories>
+  <url type="homepage">https://github.com/escapechen/FriedasBirdview</url>
+  <url type="bugtracker">https://github.com/escapechen/FriedasBirdview/issues</url>
+  <launchable type="desktop-id">@FRIEDASBIRDVIEW_APPLICATION_ID@.desktop</launchable>
+  <provides>
+    <binary>friedasbirdview</binary>
+  </provides>
+  <releases>
+    <release version="@PROJECT_VERSION@" date="2026-07-27"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

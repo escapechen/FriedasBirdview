@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=FriedasBirdview
+Comment=Frigate activity companion for KDE Plasma
+Exec=friedasbirdview
+Icon=@FRIEDASBIRDVIEW_APPLICATION_ID@
+Terminal=false
+Categories=AudioVideo;Video;
+StartupNotify=false

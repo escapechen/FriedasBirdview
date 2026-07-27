@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+  <longdescription>
+    FriedasBirdview is a KDE Plasma system-tray companion for Frigate NVR. It
+    displays non-activating, timed camera feeds for selected Frigate events.
+  </longdescription>
+  <upstream>
+    <remote-id type="github">escapechen/FriedasBirdview</remote-id>
+  </upstream>
+</pkgmetadata>

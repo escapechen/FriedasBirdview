@@ -1,0 +1,50 @@
+# Local developer manifest.  The Flathub submission manifest must replace the
+# directory source below with an immutable release archive and SHA-256 hash.
+id: io.github.escapechen.friedasbirdview
+runtime: org.kde.Platform
+runtime-version: '6.10'
+sdk: org.kde.Sdk
+base: io.qt.qtwebengine.BaseApp
+base-version: '6.10'
+command: friedasbirdview
+
+finish-args:
+  # Required for Frigate, go2rtc, and Qt WebEngine network requests.
+  - --share=network
+  # Qt WebEngine uses shared memory and GPU acceleration.
+  - --share=ipc
+  - --device=dri
+  - --socket=x11
+  # Qt Multimedia uses the PulseAudio compatibility socket, including on
+  # PipeWire desktops.
+  - --socket=pulseaudio
+  # Native system-tray status item and the existing KDE Wallet backend.
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.kde.kwalletd6
+  # Provided by io.qt.qtwebengine.BaseApp.
+  - --env=QTWEBENGINEPROCESS_PATH=/app/bin/QtWebEngineProcess
+  - --env=QTWEBENGINE_DICTIONARIES_PATH=/app/qtwebengine_dictionaries
+  # QFileDialog must use the document portal to open a user-selected host CA.
+  - --env=QT_QPA_PLATFORMTHEME=xdgdesktopportal
+
+cleanup-commands:
+  - /app/cleanup-BaseApp.sh
+
+modules:
+  # The runtime contains the NSS libraries used by Qt WebEngine, but not the
+  # certutil command. Bundle that small companion utility so custom CA import
+  # remains functional inside the sandbox.
+  - name: nss-certutil
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 /usr/bin/certutil /app/bin/certutil
+
+  - name: friedasbirdview
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DFRIEDASBIRDVIEW_APPLICATION_ID=io.github.escapechen.friedasbirdview
+      - -DFRIEDASBIRDVIEW_FLATPAK=ON
+    sources:
+      - type: dir
+        path: ../..
