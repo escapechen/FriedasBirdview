@@ -1,7 +1,6 @@
 #pragma once
 
 #include <QList>
-#include <QList>
 #include <QNetworkCookie>
 #include <QSslCertificate>
 #include <QSet>
@@ -14,6 +13,9 @@ class QWebChannel;
 class QWebEnginePage;
 class QWebEngineProfile;
 class QWebEngineView;
+class QStackedLayout;
+class NativeStreamPlayer;
+class StreamArtworkWidget;
 class StreamViewWindowsBackend;
 
 class StreamBridge final : public QObject {
@@ -61,11 +63,16 @@ private:
     std::unique_ptr<StreamViewWindowsBackend> m_windowsBackend;
 #else
     QString streamHtml(const QUrl &serverUrl, const QString &streamName) const;
+    void startWebEngineFallback();
     void loadHtmlWhenCookiesAreReady(int loadId, const QString &html, const QUrl &serverUrl);
     void cookieAdded(const QNetworkCookie &cookie);
 
+    QList<QSslCertificate> m_customCaCertificates;
+    std::unique_ptr<NativeStreamPlayer> m_nativePlayer;
+    StreamArtworkWidget *m_artwork = nullptr;
     QWebEngineProfile *m_profile = nullptr;
     QWebEngineView *m_view = nullptr;
+    QStackedLayout *m_layout = nullptr;
     QWebEnginePage *m_page = nullptr;
     QWebChannel *m_channel = nullptr;
     StreamBridge *m_bridge = nullptr;
@@ -74,5 +81,9 @@ private:
     QSet<QByteArray> m_pendingCookieNames;
     QString m_pendingHtml;
     QUrl m_pendingServerUrl;
+    QString m_pendingStreamName;
+    QList<QNetworkCookie> m_pendingCookies;
+    bool m_usingNativePlayer = false;
+    bool m_browserFallbackActive = false;
 #endif
 };

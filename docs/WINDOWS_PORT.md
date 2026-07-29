@@ -9,16 +9,17 @@ contains no production connection details or credentials.
 - Linux/KDE is available as a native build and Flatpak bundle.
 - Windows 11 x64 is available as a native CMake/MSVC build and an Inno Setup
   installer with its runtime dependencies included.
-- The CMake project currently reports version `1.8.0`; release it as tag
-  `v1.8.0` after the Windows installer smoke test passes.
+- The CMake project currently reports version `1.9.0`; release it as tag
+  `v1.9.0` after the Windows installer smoke test passes.
 
 ## What is already portable
 
 The Qt Widgets UI, Frigate HTTP client, event filtering, JPEG feed, sound
 notifications, and Qt Multimedia are shared. Windows uses a native Edge
-WebView2 MSE view, while Linux retains Qt WebEngine. Both keep a bounded
-near-live buffer and automatically fall back to JPEG snapshots when playback
-cannot recover.
+WebView2 MSE view. Linux first feeds go2rtc's authenticated progressive MP4
+endpoint to Qt Multimedia's system FFmpeg backend, then uses its native MSE
+and Qt WebEngine compatibility players. Both keep bounded buffers and
+automatically fall back to JPEG snapshots when playback cannot recover.
 
 ### Windows live-video rendering
 

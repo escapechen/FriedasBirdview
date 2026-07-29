@@ -32,7 +32,7 @@
     <binary>friedasbirdview</binary>
   </provides>
   <releases>
-    <release version="@PROJECT_VERSION@" date="2026-07-27"/>
+    <release version="@PROJECT_VERSION@" date="2026-07-29"/>
   </releases>
   <content_rating type="oars-1.1"/>
 </component>

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(FriedasBirdview VERSION 1.8.0 LANGUAGES CXX)
+project(FriedasBirdview VERSION 1.9.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -36,7 +36,14 @@ if(WIN32)
     endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(FRIEDASBIRDVIEW_ABOUT_PLATFORM "KDE Plasma on Linux")
-    list(APPEND FRIEDASBIRDVIEW_QT_COMPONENTS WebChannel WebEngineCore WebEngineWidgets DBus)
+    list(APPEND FRIEDASBIRDVIEW_QT_COMPONENTS
+        MultimediaWidgets
+        WebChannel
+        WebEngineCore
+        WebEngineWidgets
+        WebSockets
+        DBus
+    )
     find_package(KF6Wallet 6.0 REQUIRED)
     list(APPEND FRIEDASBIRDVIEW_PLATFORM_SOURCES
         src/AutostartManager.cpp
@@ -94,6 +101,7 @@ qt_add_executable(friedasbirdview
 qt_add_resources(friedasbirdview "friedasbirdview_resources"
     PREFIX "/"
     FILES
+        docs/images/frieda-birdview-hero.png
         resources/icons/friedasbirdview.png
         resources/icons/friedasbirdview.svg
 )
@@ -117,9 +125,11 @@ if(WIN32)
     )
 else()
     target_link_libraries(friedasbirdview PRIVATE
+        Qt6::MultimediaWidgets
         Qt6::WebChannel
         Qt6::WebEngineCore
         Qt6::WebEngineWidgets
+        Qt6::WebSockets
         Qt6::DBus
         KF6::Wallet
     )

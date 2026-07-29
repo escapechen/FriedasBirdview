@@ -29,8 +29,9 @@ the project maintainer.
   object.
 - Shows the detected label, confidence, camera, and countdown.
 - Uses JPEG snapshots by default, with an authenticated low-latency go2rtc MSE
-  live-stream option that automatically falls back to JPEG if playback is
-  unavailable, stalls, or repeatedly fails.
+  live-stream option. On Linux it first uses Qt Multimedia's system FFmpeg
+  backend, then the existing Qt WebEngine compatibility player, before falling
+  back to JPEG if playback is unavailable, stalls, or repeatedly fails.
 - Can play an opt-in, user-selected sound for a newly detected matching event.
 - Offers independent, optional cooldowns for automatic popups and sound alerts.
 - Stores an optional Frigate password in KDE Wallet on Linux or Windows
@@ -47,8 +48,9 @@ the project maintainer.
 
 - **Linux:** KDE Plasma on a current Linux distribution, under Wayland or X11.
   Building from source requires CMake, a C++20 compiler, Qt 6 (Core, Gui,
-  Widgets, Network, Multimedia, WebChannel, and WebEngineWidgets), and KF6
-  Wallet development packages.
+  Widgets, Network, Multimedia, MultimediaWidgets, WebSockets, WebChannel,
+  and WebEngineWidgets), a Qt Multimedia FFmpeg backend, and KF6 Wallet
+  development packages.
 - **Windows:** Windows 11 x64. The Setup installer includes Qt, the Microsoft
   C++ runtime, and OpenSSL; live video uses the Windows 11 WebView2 runtime,
   which is supplied and updated by Windows. No developer tools are needed.
@@ -147,11 +149,15 @@ tray state; it never terminates the app.
 For **Live stream**, the selected camera needs a working Frigate/go2rtc MSE
 restream and a codec the platform player can play. FriedasBirdview uses the Frigate
 configuration mapping `cameras.<camera>.live.streams`; a camera name is not
-assumed to be the go2rtc stream name. It keeps playback near the live edge and
-automatically switches to **JPEG snapshots** after incompatible, stalled, or
-repeatedly failed live playback. Windows uses Edge WebView2 for live playback,
-so it uses the H.264 support
-already maintained by Windows rather than bundling a proprietary codec library.
+assumed to be the go2rtc stream name. No extra Frigate ports, RTSP credentials,
+or per-camera restream configuration is required. Linux first feeds go2rtc's
+authenticated progressive MP4 endpoint to Qt Multimedia's FFmpeg backend; it
+falls back to the native MSE relay if that endpoint is unavailable. This avoids
+Qt WebEngine's Chromium codec build. The Qt WebEngine player remains the
+compatibility fallback, followed by **JPEG snapshots** after incompatible,
+stalled, or repeatedly failed playback. Windows uses Edge WebView2 for live
+playback, so it uses the H.264 support already maintained by Windows rather
+than bundling a proprietary codec library.
 
 ## Important Frigate distinction
 
@@ -172,7 +178,7 @@ records and filters them by object classification.
 | The app does not start after sign-in | Confirm the **Startup** switch is enabled. Linux native installs use XDG autostart, Flatpak requires desktop Background portal approval, and Windows uses the current user’s startup entry. Re-enable after moving a native Linux executable. |
 | No sound is heard | Enable **Sound alerts**, use **Preview**, and check the desktop output device and volume. |
 | Private CA works for JPEG but not live video on Windows | WebView2 trusts the Windows Current User certificate store. Import Frigate’s issuing CA there; FriedasBirdview never bypasses certificate validation. Linux native packages use the private NSS database, and the Flatpak includes `certutil`. |
-| Live stream switches to JPEG | Confirm the stream plays in Frigate and a compatible go2rtc codec is available. The stock Windows Qt WebEngine may lack H.264/H.265 support; FriedasBirdview then falls back immediately rather than showing a black panel. |
+| Live stream switches to JPEG | Confirm the stream plays in Frigate and a compatible go2rtc codec is available. On Linux, confirm the Qt Multimedia FFmpeg backend is installed; FriedasBirdview tries it before the Qt WebEngine compatibility player and then falls back rather than showing a black panel. |
 | Feed is on the wrong screen | Drag it to the intended display once. On Wayland placement is ultimately controlled by KWin. |
 
 ## Project notes

@@ -6,6 +6,22 @@ versioning when releases are tagged.
 
 ## [Unreleased]
 
+## [1.9.0]
+
+### Added
+
+- Linux live playback now attempts go2rtc's authenticated progressive MP4
+  endpoint through Qt Multimedia and the system FFmpeg backend before using
+  the existing native MSE and WebEngine compatibility paths.
+- The live-feed panel now shows Frieda artwork while a Linux video player is
+  connecting, retrying, or unable to decode a stream, instead of leaving an
+  empty video surface.
+
+### Changed
+
+- The Gentoo ebuild now declares Qt WebSockets, which the Linux native MSE
+  compatibility player requires.
+
 ## [1.8.0]
 
 ### Changed
@@ -152,3 +168,4 @@ versioning when releases are tagged.
 [1.6.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.6.0
 [1.7.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.7.0
 [1.8.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.8.0
+[1.9.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.9.0
