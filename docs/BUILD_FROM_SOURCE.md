@@ -1,4 +1,8 @@
-# Build FriedasBirdview from Source
+# Build FriedasBirdview from Source on Linux
+
+FriedasBirdview also has a native Windows 11 build and Setup installer. See
+[Windows build, installer, and release details](WINDOWS_PORT.md) for that
+platform.
 
 ## Before you start
 

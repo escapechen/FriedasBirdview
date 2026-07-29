@@ -7,6 +7,9 @@ WINDOWS_SSH_TARGET='builduser@windows-build.example.invalid'
 WINDOWS_SSH_PORT='22'
 WINDOWS_SSH_IDENTITY_FILE=''
 
+# The ordinary source checkout. It may have local work: the script never
+# changes it. For each tag it creates and cleans a sibling worktree named
+# FriedasBirdview-release-vX.Y.Z.
 WINDOWS_REPOSITORY_DIR='C:\Users\builduser\source\FriedasBirdview'
 WINDOWS_QT_ROOT='C:\Qt\6.11.1\msvc2022_64'
 WINDOWS_VCPKG_ROOT='C:\src\vcpkg'

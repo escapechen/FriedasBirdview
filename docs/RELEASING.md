@@ -1,7 +1,8 @@
 # Releasing FriedasBirdview
 
-The `project(... VERSION ...)` value in `CMakeLists.txt` is the single source
-of truth for every release artifact: the Windows Setup filename/version, the
+FriedasBirdview releases native Linux/KDE and Windows builds. The
+`project(... VERSION ...)` value in `CMakeLists.txt` is the single source of
+truth for every release artifact: the Windows Setup filename/version, the
 host-side upload script, and the release-tag validation in GitHub Actions.
 
 For every user-visible code, packaging, or security change, raise at least the
@@ -23,3 +24,5 @@ Before publishing:
 GitHub Actions and `build-and-install-windows.sh` reject a release tag that
 does not equal `v` followed by the CMake project version. Upload the verified
 Windows Setup asset only after the tag workflow has created its GitHub Release.
+The Windows script fetches the tag itself and builds it in a clean, dedicated
+sibling worktree on the VM; no interactive VM checkout or cleanup is needed.

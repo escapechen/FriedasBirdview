@@ -2,10 +2,11 @@
 
 ![Frieda walking through a twilight garden](docs/images/frieda-birdview-hero.png)
 
-FriedasBirdview is a small KDE Plasma tray app compatible with
-[Frigate NVR](https://github.com/blakeblackshear/frigate). When Frigate detects
-something you care about—such as a person, pet, bird, or named animal—the app
-opens a temporary camera feed above your work without taking keyboard focus.
+FriedasBirdview is a small desktop companion for Linux/KDE Plasma and Windows
+11, compatible with [Frigate NVR](https://github.com/blakeblackshear/frigate).
+When Frigate detects something you care about—such as a person, pet, bird, or
+named animal—the app opens a temporary camera feed above your work without
+taking keyboard focus.
 
 > FriedasBirdview is an independent application compatible with Frigate. It is
 > not affiliated with or endorsed by Frigate, Inc.
@@ -21,8 +22,9 @@ the project maintainer.
 ## What it does
 
 - Watches recent Frigate events and review activity every two seconds.
-- Can start itself at sign-in through the freedesktop XDG autostart standard,
-  or the desktop Background portal when installed as Flatpak.
+- Can start itself at sign-in through freedesktop XDG autostart on native
+  Linux, the desktop Background portal in Flatpak, or the current-user Windows
+  startup registry entry.
 - Opens a movable, timed feed for selected classifications or any tracked
   object.
 - Shows the detected label, confidence, camera, and countdown.
@@ -30,8 +32,9 @@ the project maintainer.
   live-stream option.
 - Can play an opt-in, user-selected sound for a newly detected matching event.
 - Offers independent, optional cooldowns for automatic popups and sound alerts.
-- Stores an optional Frigate password only in KDE Wallet; settings and the
-  WebEngine profile do not persist passwords or session cookies.
+- Stores an optional Frigate password in KDE Wallet on Linux or Windows
+  Credential Manager on Windows; settings and the WebEngine profile do not
+  persist passwords or session cookies.
 - Remembers the feed window’s size and position without taking keyboard focus.
   In a Plasma Wayland session it uses the available Xwayland compatibility
   backend, because standard Wayland does not permit an app to restore an
@@ -39,21 +42,24 @@ the project maintainer.
 - Shows connection-lost/restored notifications and a red tray icon when
   Frigate cannot be reached.
 
-## Requirements
+## Platforms and requirements
 
-- KDE Plasma on a current Linux distribution, under Wayland or X11.
-- CMake, a C++20 compiler, Qt 6 (Core, Gui, Widgets, Network, Multimedia,
-  WebChannel, and WebEngineWidgets), and the KF6 Wallet development package.
+- **Linux:** KDE Plasma on a current Linux distribution, under Wayland or X11.
+  Building from source requires CMake, a C++20 compiler, Qt 6 (Core, Gui,
+  Widgets, Network, Multimedia, WebChannel, and WebEngineWidgets), and KF6
+  Wallet development packages.
+- **Windows:** Windows 11 x64. The Setup installer includes Qt, the Microsoft
+  C++ runtime, and OpenSSL; no developer tools are needed to run it.
 - A reachable [Frigate NVR](https://github.com/blakeblackshear/frigate) server.
-- A certificate your Linux trust store accepts, or its issuing CA certificate
-  for the in-app custom-CA picker. FriedasBirdview deliberately keeps normal
-  TLS validation enabled.
+- A certificate the operating system trusts, or its issuing CA certificate for
+  the in-app custom-CA picker. FriedasBirdview deliberately keeps normal TLS
+  validation enabled.
 
 On distributions that split development packages, install the Qt WebEngine and
 KWallet development packages, OpenSSL development files, and the NSS
 `certutil` tool in addition to the base Qt 6 and KF6 packages.
 
-## Build and install
+## Build from source on Linux
 
 From this repository:
 
@@ -76,7 +82,12 @@ cmake --install build --prefix /your/chosen/prefix
 
 ## Packages
 
-- **Flatpak bundle:** download
+- **Windows 11:** download `FriedasBirdview-<version>-Setup-x64.exe` from the
+  [latest GitHub Release](https://github.com/escapechen/FriedasBirdview/releases/latest),
+  then run the installer. It includes all runtime dependencies and provides an
+  uninstaller. Public installers are currently unsigned, so Windows may show a
+  SmartScreen warning until public code signing is added.
+- **Linux Flatpak bundle:** download
   [`friedasbirdview-x86_64.flatpak`](https://github.com/escapechen/FriedasBirdview/releases/latest/download/friedasbirdview-x86_64.flatpak)
   from the latest GitHub Release, then install it with
   `flatpak install --user ./friedasbirdview-x86_64.flatpak`.
@@ -90,16 +101,18 @@ cmake --install build --prefix /your/chosen/prefix
 
 1. Start **FriedasBirdview** and open its tray icon’s **Settings**.
 2. Optionally enable **Start FriedasBirdview automatically when I sign in**.
-   Native installs use your desktop’s XDG autostart location. Flatpak installs
-   ask the desktop’s Background portal for approval instead.
+   Native Linux installs use your desktop’s XDG autostart location, Flatpak
+   installs ask the desktop’s Background portal for approval, and Windows uses
+   the current user’s startup entry.
 3. Enter the full Frigate base URL, including `https://` and any non-standard
    port, such as `https://frigate.example.net:8971`, then choose **Apply**.
    If the scheme is omitted, FriedasBirdview uses `https://`; an explicit
    `http://` address remains available only for a deliberately insecure local
    deployment.
 4. If Frigate has login enabled, enter the username and password. The password
-   is saved in KDE Wallet, not in the application settings. Leave Password
-   empty when applying unrelated settings to retain the saved password.
+   is saved in KDE Wallet on Linux or Windows Credential Manager on Windows,
+   not in the application settings. Leave Password empty when applying
+   unrelated settings to retain the saved password.
 5. If Frigate uses a private CA, add its public root/issuing CA certificate in
    **Custom certificate authorities**, then restart FriedasBirdview before
    using live video. This adds only that CA as a trust anchor; certificate
@@ -150,8 +163,8 @@ records and filters them by object classification.
 | No popup | Confirm monitoring is running. Temporarily choose **Any tracked object**, then inspect the tray menu’s last activity. |
 | A new event did not reopen the feed or play a sound | Check whether the respective cooldown is enabled and has not yet elapsed. |
 | A name never triggers | Add the exact event label or sub-label reported by Frigate. A Birdseye image without a new event does not count. |
-| Password cannot be saved | Enable and unlock KDE Wallet, then apply the settings again. |
-| The app does not start after sign-in | Confirm the **Startup** switch is enabled. Native installs require XDG autostart; Flatpak installs require a desktop Background portal and its approval. Re-enable native autostart after moving the executable. |
+| Password cannot be saved | On Linux, enable and unlock KDE Wallet; on Windows, check Credential Manager access for the current user. Then apply the settings again. |
+| The app does not start after sign-in | Confirm the **Startup** switch is enabled. Linux native installs use XDG autostart, Flatpak requires desktop Background portal approval, and Windows uses the current user’s startup entry. Re-enable after moving a native Linux executable. |
 | No sound is heard | Enable **Sound alerts**, use **Preview**, and check the desktop output device and volume. |
 | Private CA works for JPEG but not live video | Add the issuing CA in **Custom certificate authorities**, then fully restart FriedasBirdview. Native packages require the NSS `certutil` tool; the Flatpak includes it. |
 | Live stream is black or frozen | Confirm the stream plays in Frigate and a compatible go2rtc codec is available; choose JPEG snapshots as the immediate fallback. |
@@ -159,7 +172,8 @@ records and filters them by object classification.
 
 ## Project notes
 
-- [Build details](docs/BUILD_FROM_SOURCE.md)
+- [Linux source-build details](docs/BUILD_FROM_SOURCE.md)
+- [Windows build, installer, and release details](docs/WINDOWS_PORT.md)
 - [Release process and versioning](docs/RELEASING.md)
 - [Flatpak package](docs/FLATPAK.md)
 - [Gentoo ebuild and local-overlay instructions](docs/GENTOO.md)

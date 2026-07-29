@@ -1,16 +1,16 @@
-# Windows port handoff
+# Windows build, installer, and release
 
-This document is the starting point for a future native Windows build of
-FriedasBirdview. It describes the intended architecture and the first setup;
-it contains no production connection details or credentials.
+FriedasBirdview has native Linux/KDE Plasma and Windows 11 x64 builds. This
+document describes the Windows build, installer, and release process; it
+contains no production connection details or credentials.
 
 ## Status
 
-- Linux/KDE and Flatpak are the current supported release targets.
-- The public `v1.0.1` release is a Linux Flatpak release.
-- Windows has a native CMake/MSVC build path. It is not packaged or released yet.
-- The CMake project currently reports version `1.3.0`; release it only as tag
-  `v1.3.0` after the Windows installer smoke test passes.
+- Linux/KDE is available as a native build and Flatpak bundle.
+- Windows 11 x64 is available as a native CMake/MSVC build and an Inno Setup
+  installer with its runtime dependencies included.
+- The CMake project currently reports version `1.4.0`; release it as tag
+  `v1.4.0` after the Windows installer smoke test passes.
 
 ## What is already portable
 
@@ -27,8 +27,8 @@ Install these in this order:
    workload. Include MSVC v143 x64/x86, CMake tools, Ninja, and the Windows 11
    SDK.
 2. The **Qt Online Installer**, open-source edition. Install a 64-bit
-   `msvc2022_64` Qt 6 kit. Prefer the same Qt 6.10 series used by the Flatpak
-   runtime and select Qt WebEngine.
+   `msvc2022_64` Qt 6.10-or-newer kit and select Qt WebEngine. The release VM
+   is tested with Qt 6.11.1.
 3. **Git for Windows** for repository access.
 4. **vcpkg**, then install the CMake-visible OpenSSL development package:
 
@@ -48,7 +48,7 @@ kit. Qt 6.10 or newer is required on Windows because WebEngine uses its
 app-scoped additional-CA API:
 
 ```powershell
-$env:QT_ROOT = 'C:\Qt\6.10.0\msvc2022_64'
+$env:QT_ROOT = 'C:\Qt\6.11.1\msvc2022_64'
 cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Debug `
   -DQt6_DIR="$env:QT_ROOT\lib\cmake\Qt6" `
   -DCMAKE_TOOLCHAIN_FILE=C:\src\vcpkg\scripts\buildsystems\vcpkg.cmake
@@ -128,7 +128,7 @@ winget install JRSoftware.InnoSetup
 Then, from the same Visual Studio Developer PowerShell used to build:
 
 ```powershell
-$env:QT_ROOT = 'C:\Qt\6.10.0\msvc2022_64'
+$env:QT_ROOT = 'C:\Qt\6.11.1\msvc2022_64'
 .\packaging\windows\package.ps1
 ```
 
@@ -176,17 +176,21 @@ an existing GitHub Release. It does not create tags, commits, or releases.
 ```sh
 cp build-and-install-windows.conf.example build-and-install-windows.conf
 chmod 600 build-and-install-windows.conf
-# Edit only the ignored local config, then ensure the Windows checkout is clean
-# and checked out at the same release tag.
+# Edit only the ignored local config. Its Windows repository path names the
+# ordinary source checkout; it may have local changes. The script fetches the
+# tag and uses a clean sibling worktree automatically.
 ./build-and-install-windows.sh v1.2.3
+# After the GitHub Release exists, this reuses the locally verified assets; it
+# does not rebuild the Windows VM package.
 ./build-and-install-windows.sh --publish v1.2.3
 ```
 
 The tag must exactly match the CMake version (`v1.2.3` for `1.2.3`). The script
-fails if the VM checkout is dirty, not at that tag, CTest fails, no CTest tests
-are registered (unless explicitly allowed in the ignored config), the hashes do
-not match, or the GitHub Release does not already exist. Local assets are kept
-under ignored `dist/windows/<tag>/`.
+fetches that tag and creates or resets only its sibling worktree named
+`FriedasBirdview-release-v1.2.3`; it never changes the configured source
+checkout. CTest failures, zero CTest tests (unless explicitly allowed in the
+ignored config), hash mismatches, or a missing GitHub Release stop the process.
+Local assets are kept under ignored `dist/windows/<tag>/`.
 
 ## Verification checklist
 

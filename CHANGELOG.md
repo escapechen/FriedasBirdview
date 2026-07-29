@@ -6,6 +6,14 @@ versioning when releases are tagged.
 
 ## [Unreleased]
 
+## [1.4.0]
+
+### Changed
+
+- The Windows release handoff now fetches its requested tag and creates or
+  safely resets a dedicated sibling worktree on the VM, leaving the ordinary
+  development checkout untouched.
+
 ## [1.3.0]
 
 ### Fixed
@@ -104,3 +112,4 @@ versioning when releases are tagged.
 [1.1.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.1.0
 [1.2.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.2.0
 [1.3.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.3.0
+[1.4.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.4.0

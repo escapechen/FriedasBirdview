@@ -16,10 +16,12 @@ usage() {
     cat <<'EOF'
 Usage: ./build-and-install-windows.sh [--publish] [--config FILE] vX.Y.Z
 
-Builds and tests the exact tagged checkout already present on the configured
-Windows VM, downloads the Setup installer and its SHA-256 manifest, and
-verifies the download locally. --publish additionally attaches both files to
-the existing GitHub Release. It never creates a release, tag, or commit.
+Fetches the requested tag on the configured Windows VM, creates or resets an
+isolated release worktree, then builds and tests it. The script downloads the
+Setup installer and its SHA-256 manifest and verifies the download locally.
+--publish additionally attaches both files to the existing GitHub Release. It
+never creates a release, tag, or commit, and never alters the configured
+source checkout.
 EOF
 }
 
@@ -97,6 +99,48 @@ if [[ -n $WINDOWS_SSH_IDENTITY_FILE ]]; then
     [[ -r $WINDOWS_SSH_IDENTITY_FILE ]] || die "WINDOWS_SSH_IDENTITY_FILE is not readable: $WINDOWS_SSH_IDENTITY_FILE"
 fi
 
+version=${release_tag#v}
+installer_name="FriedasBirdview-$version-Setup-x64.exe"
+asset_directory="$script_dir/dist/windows/$release_tag"
+
+verify_local_assets() {
+    local checksum_file=$asset_directory/$installer_name.sha256
+    local expected_checksum actual_checksum
+
+    [[ -f $asset_directory/$installer_name ]] || die "Verified installer is missing: $asset_directory/$installer_name"
+    [[ -f $checksum_file ]] || die "Verified SHA-256 manifest is missing: $checksum_file"
+    expected_checksum=$(awk 'NR == 1 { print $1; exit }' "$checksum_file")
+    actual_checksum=$(shasum -a 256 "$asset_directory/$installer_name" | awk '{ print $1 }')
+    [[ $expected_checksum =~ ^[0-9A-Fa-f]{64}$ ]] || die 'Local SHA-256 manifest is malformed.'
+    grep -Fqx -- "$expected_checksum *$installer_name" "$checksum_file" ||
+        die 'Local SHA-256 manifest does not describe the installer.'
+    [[ $expected_checksum == "$actual_checksum" ]] || die 'Local SHA-256 verification of the installer failed.'
+}
+
+publish_assets() {
+    command -v gh >/dev/null 2>&1 || die 'GitHub CLI (gh) is required for --publish.'
+    gh auth status --hostname github.com >/dev/null
+    gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null ||
+        die "GitHub Release $release_tag does not exist in $GITHUB_REPOSITORY. Create it (normally by pushing the tag) before uploading."
+
+    gh release upload "$release_tag" \
+        "$asset_directory/$installer_name" \
+        "$asset_directory/$installer_name.sha256" \
+        --repo "$GITHUB_REPOSITORY" \
+        --clobber
+    printf 'Uploaded verified Windows installer assets to %s release %s.\n' "$GITHUB_REPOSITORY" "$release_tag"
+}
+
+if [[ -e $asset_directory ]]; then
+    [[ -d $asset_directory ]] || die "Local asset path is not a directory: $asset_directory"
+    if $publish; then
+        verify_local_assets
+        publish_assets
+        exit 0
+    fi
+    die "Verified local assets already exist: $asset_directory (use --publish to upload them)."
+fi
+
 powershell_literal() {
     local value=${1//\'/\'\'}
     printf "'%s'" "$value"
@@ -146,35 +190,77 @@ function Import-DeveloperEnvironment {
 }
 
 if (-not (Test-Path -LiteralPath $RepositoryDir)) {
-    throw "Windows repository is missing: $RepositoryDir"
+    throw "Windows source checkout is missing: $RepositoryDir"
 }
 
-$gitStatus = & git.exe -C $RepositoryDir status --porcelain
+$sourceTopLevelOutput = & git.exe -C $RepositoryDir rev-parse --show-toplevel
 if ($LASTEXITCODE -ne 0) {
-    throw 'Could not inspect the Windows checkout with git.'
+    throw "Windows source checkout is not a Git worktree: $RepositoryDir"
 }
-if (-not [string]::IsNullOrWhiteSpace(($gitStatus -join "`n"))) {
-    throw 'The Windows checkout is dirty. Commit/stash its changes and check out the release tag before publishing.'
+$sourceTopLevel = [System.IO.Path]::GetFullPath(($sourceTopLevelOutput -join "`n").Trim()).TrimEnd([char[]]@('\', '/'))
+$repositoryRoot = [System.IO.Path]::GetFullPath($RepositoryDir).TrimEnd([char[]]@('\', '/'))
+if (-not $sourceTopLevel.Equals($repositoryRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "WINDOWS_REPOSITORY_DIR must name the source checkout root, not a subdirectory: $RepositoryDir"
 }
 
-$headCommitOutput = & git.exe -C $RepositoryDir rev-parse HEAD
+& git.exe -C $RepositoryDir fetch --tags --force origin
 if ($LASTEXITCODE -ne 0) {
-    throw 'Could not determine the Windows checkout commit.'
+    throw 'Fetching release tags from origin failed.'
 }
-$headCommit = ($headCommitOutput -join "`n").Trim()
-$tagCommitOutput = & git.exe -C $RepositoryDir rev-list -n 1 $ReleaseTag
+
+$tagCommitOutput = & git.exe -C $RepositoryDir rev-parse ($ReleaseTag + '^{commit}')
 if ($LASTEXITCODE -ne 0) {
-    throw "The Windows checkout does not know release tag $ReleaseTag. Fetch tags, then check it out."
+    throw "The source checkout does not know release tag $ReleaseTag after fetching tags."
 }
 $tagCommit = ($tagCommitOutput -join "`n").Trim()
 if ([string]::IsNullOrWhiteSpace($tagCommit)) {
-    throw "The Windows checkout does not know release tag $ReleaseTag. Fetch tags, then check it out."
-}
-if ($headCommit -ne $tagCommit) {
-    throw "The Windows checkout is not at $ReleaseTag. It is at $headCommit."
+    throw "The source checkout does not know release tag $ReleaseTag after fetching tags."
 }
 
-$cmakeLists = Get-Content -LiteralPath (Join-Path $RepositoryDir 'CMakeLists.txt') -Raw
+$sourceLeaf = Split-Path -Path $RepositoryDir -Leaf
+$releaseWorktreeDir = Join-Path (Split-Path -Path $RepositoryDir -Parent) "$sourceLeaf-release-$ReleaseTag"
+if (Test-Path -LiteralPath $releaseWorktreeDir) {
+    $sourceCommonGitDirOutput = & git.exe -C $RepositoryDir rev-parse --path-format=absolute --git-common-dir
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not determine the source checkout Git directory.'
+    }
+    $worktreeCommonGitDirOutput = & git.exe -C $releaseWorktreeDir rev-parse --path-format=absolute --git-common-dir
+    if ($LASTEXITCODE -ne 0) {
+        throw "Existing release directory is not a Git worktree: $releaseWorktreeDir"
+    }
+    $sourceCommonGitDir = ($sourceCommonGitDirOutput -join "`n").Trim().TrimEnd([char[]]@('\', '/'))
+    $worktreeCommonGitDir = ($worktreeCommonGitDirOutput -join "`n").Trim().TrimEnd([char[]]@('\', '/'))
+    if (-not $sourceCommonGitDir.Equals($worktreeCommonGitDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to clean a release directory owned by another repository: $releaseWorktreeDir"
+    }
+
+    Write-Output "Resetting script-managed release worktree: $releaseWorktreeDir"
+    & git.exe -C $releaseWorktreeDir reset --hard --quiet $tagCommit
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not reset the release worktree: $releaseWorktreeDir"
+    }
+    & git.exe -C $releaseWorktreeDir clean -ffdx
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not clean the release worktree: $releaseWorktreeDir"
+    }
+} else {
+    Write-Output "Creating clean release worktree: $releaseWorktreeDir"
+    & git.exe -C $RepositoryDir worktree add --detach $releaseWorktreeDir $tagCommit
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not create the release worktree: $releaseWorktreeDir"
+    }
+}
+
+$headCommitOutput = & git.exe -C $releaseWorktreeDir rev-parse HEAD
+if ($LASTEXITCODE -ne 0) {
+    throw 'Could not determine the release worktree commit.'
+}
+$headCommit = ($headCommitOutput -join "`n").Trim()
+if ($headCommit -ne $tagCommit) {
+    throw "Release worktree is not at $ReleaseTag. It is at $headCommit."
+}
+
+$cmakeLists = Get-Content -LiteralPath (Join-Path $releaseWorktreeDir 'CMakeLists.txt') -Raw
 $versionMatch = [regex]::Match($cmakeLists, 'project\(FriedasBirdview VERSION ([0-9][^ )]*)')
 if (-not $versionMatch.Success) {
     throw 'Could not determine the CMake project version.'
@@ -187,9 +273,9 @@ if ($ReleaseTag -ne "v$version") {
 Import-DeveloperEnvironment
 $env:QT_ROOT = $QtRoot
 
-$buildDirectory = Join-Path $RepositoryDir 'build-win-package'
-$outputDirectory = Join-Path $RepositoryDir 'dist'
-$packageScript = Join-Path $RepositoryDir 'packaging\windows\package.ps1'
+$buildDirectory = Join-Path $releaseWorktreeDir 'build-win-package'
+$outputDirectory = Join-Path $releaseWorktreeDir 'dist'
+$packageScript = Join-Path $releaseWorktreeDir 'packaging\windows\package.ps1'
 $packageParameters = @{
     QtRoot = $QtRoot
     VcpkgRoot = $VcpkgRoot
@@ -256,23 +342,24 @@ remote_command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypas
 printf '%s\n' 'Building and testing on the Windows VM...'
 ssh "${ssh_options[@]}" "$WINDOWS_SSH_TARGET" "$remote_command"
 
-version=${release_tag#v}
-installer_name="FriedasBirdview-$version-Setup-x64.exe"
-remote_dist=${WINDOWS_REPOSITORY_DIR%/}
-remote_dist=${remote_dist%\\}
-remote_dist="$remote_dist/dist"
+remote_worktree=${WINDOWS_REPOSITORY_DIR//\\//}
+remote_worktree=${remote_worktree%/}
+remote_worktree="$remote_worktree-release-$release_tag"
+remote_dist="$remote_worktree/dist"
 remote_installer="$remote_dist/$installer_name"
 remote_checksum="$remote_installer.sha256"
 
 temporary_download=$(mktemp -d "${TMPDIR:-/tmp}/friedasbirdview-windows.XXXXXX")
 cleanup() {
-    [[ -n ${temporary_download:-} && -d $temporary_download ]] && rm -rf -- "$temporary_download"
+    if [[ -n ${temporary_download:-} && -d $temporary_download ]]; then
+        rm -rf -- "$temporary_download"
+    fi
 }
 trap cleanup EXIT
 
 printf '%s\n' 'Downloading release assets from the Windows VM...'
-scp "${scp_options[@]}" "${WINDOWS_SSH_TARGET}:\"${remote_installer}\"" "$temporary_download/$installer_name"
-scp "${scp_options[@]}" "${WINDOWS_SSH_TARGET}:\"${remote_checksum}\"" "$temporary_download/$installer_name.sha256"
+scp "${scp_options[@]}" "${WINDOWS_SSH_TARGET}:${remote_installer}" "$temporary_download/$installer_name"
+scp "${scp_options[@]}" "${WINDOWS_SSH_TARGET}:${remote_checksum}" "$temporary_download/$installer_name.sha256"
 
 expected_checksum=$(awk 'NR == 1 { print $1; exit }' "$temporary_download/$installer_name.sha256")
 actual_checksum=$(shasum -a 256 "$temporary_download/$installer_name" | awk '{ print $1 }')
@@ -281,8 +368,6 @@ grep -Fqx -- "$expected_checksum *$installer_name" "$temporary_download/$install
     die 'Downloaded SHA-256 manifest does not describe the downloaded installer.'
 [[ $expected_checksum == "$actual_checksum" ]] || die 'Local SHA-256 verification of the downloaded installer failed.'
 
-asset_directory="$script_dir/dist/windows/$release_tag"
-[[ ! -e $asset_directory ]] || die "Refusing to overwrite existing local assets: $asset_directory"
 mkdir -p -- "$(dirname -- "$asset_directory")"
 mv -- "$temporary_download" "$asset_directory"
 temporary_download=
@@ -293,14 +378,4 @@ if ! $publish; then
     exit 0
 fi
 
-command -v gh >/dev/null 2>&1 || die 'GitHub CLI (gh) is required for --publish.'
-gh auth status --hostname github.com >/dev/null
-gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null ||
-    die "GitHub Release $release_tag does not exist in $GITHUB_REPOSITORY. Create it (normally by pushing the tag) before uploading."
-
-gh release upload "$release_tag" \
-    "$asset_directory/$installer_name" \
-    "$asset_directory/$installer_name.sha256" \
-    --repo "$GITHUB_REPOSITORY" \
-    --clobber
-printf 'Uploaded verified Windows installer assets to %s release %s.\n' "$GITHUB_REPOSITORY" "$release_tag"
+publish_assets
