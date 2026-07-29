@@ -8,10 +8,13 @@
 #include <QUrl>
 #include <QWidget>
 
+#include <memory>
+
 class QWebChannel;
 class QWebEnginePage;
 class QWebEngineProfile;
 class QWebEngineView;
+class StreamViewWindowsBackend;
 
 class StreamBridge final : public QObject {
     Q_OBJECT
@@ -38,6 +41,7 @@ class StreamView final : public QWidget {
 
 public:
     explicit StreamView(const QList<QSslCertificate> &customCaCertificates, QWidget *parent = nullptr);
+    ~StreamView() override;
 
     void start(const QUrl &serverUrl, const QString &streamName, const QList<QNetworkCookie> &cookies);
     void stop();
@@ -49,7 +53,13 @@ signals:
     void streamConnected();
     void jpegFallbackRequested(const QString &message);
 
+protected:
+    void resizeEvent(QResizeEvent *event) override;
+
 private:
+#if defined(Q_OS_WIN)
+    std::unique_ptr<StreamViewWindowsBackend> m_windowsBackend;
+#else
     QString streamHtml(const QUrl &serverUrl, const QString &streamName) const;
     void loadHtmlWhenCookiesAreReady(int loadId, const QString &html, const QUrl &serverUrl);
     void cookieAdded(const QNetworkCookie &cookie);
@@ -64,4 +74,5 @@ private:
     QSet<QByteArray> m_pendingCookieNames;
     QString m_pendingHtml;
     QUrl m_pendingServerUrl;
+#endif
 };

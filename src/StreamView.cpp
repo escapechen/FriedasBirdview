@@ -139,6 +139,13 @@ StreamView::StreamView(const QList<QSslCertificate> &customCaCertificates, QWidg
     connect(m_profile->cookieStore(), &QWebEngineCookieStore::cookieAdded, this, &StreamView::cookieAdded);
 }
 
+StreamView::~StreamView() = default;
+
+void StreamView::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+}
+
 void StreamView::start(const QUrl &serverUrl, const QString &streamName, const QList<QNetworkCookie> &cookies)
 {
     if (!serverUrl.isValid() || streamName.trimmed().isEmpty()) {
@@ -218,7 +225,11 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
     const server = %1;
     const camera = %2;
     const video = document.getElementById("feed");
-    const codecs = ["avc1.640029", "avc1.64002A", "avc1.640033", "hvc1.1.6.L153.B0", "mp4a.40.2", "mp4a.40.5", "flac", "opus"];
+    // go2rtc selects its output from the codecs the client advertises. Keep
+    // video and audio separate: an audio-only capability list must never open
+    // an MSE feed that can only render a black video surface.
+    const videoCodecs = ["avc1.640029", "avc1.64002A", "avc1.640033", "hvc1.1.6.L153.B0", "av01.0.08M.08"];
+    const audioCodecs = ["mp4a.40.2", "mp4a.40.5", "flac", "opus"];
     const maxBufferSeconds = 4;
     const keepBufferSeconds = 2.5;
     const maxPendingBytes = 2 * 1024 * 1024;
@@ -238,6 +249,8 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
     let recoveryAttempts = 0;
     let lastPlaybackTime = -1;
     let lastPlaybackAdvanceAt = Date.now();
+    let announcedMimeType = "";
+    let renderer = navigator.userAgent.includes("Windows") ? "Windows software renderer" : "system renderer";
 
     function report(message) { if (bridge) bridge.reportError(message); }
     function fallback(message) {
@@ -342,14 +355,24 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
         video.currentTime = Math.max(0, end - 0.5);
       }
     }
+    function hasVideoCodec(mimeType) {
+      return /(?:avc1|avc3|hvc1|hev1|av01|vp09|vp8)/i.test(mimeType || "");
+    }
     function start() {
       if (!shouldReconnect) return;
       const MediaSourceConstructor = window.ManagedMediaSource || window.MediaSource;
       if (!MediaSourceConstructor) { fallback("This system cannot play Frigate's MSE stream. Showing JPEG snapshots."); return; }
-      const supported = codecs.filter((codec) =>
+      const supportedVideo = videoCodecs.filter((codec) =>
         MediaSourceConstructor.isTypeSupported(`video/mp4; codecs="${codec}"`)
-      ).join();
-      if (!supported) { fallback("No compatible Frigate video codec is available. Showing JPEG snapshots."); return; }
+      );
+      if (!supportedVideo.length) {
+        fallback("This Qt WebEngine installation cannot decode a Frigate video codec. Showing JPEG snapshots.");
+        return;
+      }
+      const supportedAudio = audioCodecs.filter((codec) =>
+        MediaSourceConstructor.isTypeSupported(`video/mp4; codecs="${codec}"`)
+      );
+      const supported = [...supportedVideo, ...supportedAudio].join();
 
       const streamURL = new URL("/live/mse/api/ws", server);
       streamURL.protocol = streamURL.protocol === "https:" ? "wss:" : "ws:";
@@ -383,7 +406,10 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
         }
         video.play().catch((error) => recover(`Live stream could not start: ${error.message || error}`));
         clearTimeout(firstFrameTimer);
-        firstFrameTimer = setTimeout(() => recover("Frigate connected but did not send playable video."), 6000);
+        firstFrameTimer = setTimeout(() => {
+          const type = announcedMimeType || "the announced stream codec";
+          recover(`Frigate connected but ${renderer} did not decode ${type}.`);
+        }, 6000);
       };
       currentSocket.onmessage = (event) => {
         if (socket !== currentSocket || isRecovering || typeof event.data !== "string") return;
@@ -393,6 +419,11 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
         if (response.type !== "mse") return;
         try {
           if (!mediaSource || sourceBuffer) return;
+          announcedMimeType = response.value;
+          if (!hasVideoCodec(announcedMimeType)) {
+            fallback("Frigate returned an audio-only live stream. Showing JPEG snapshots.");
+            return;
+          }
           sourceBuffer = mediaSource.addSourceBuffer(response.value);
           if (sourceBuffer.mode) sourceBuffer.mode = "segments";
           sourceBuffer.addEventListener("updateend", () => {
@@ -423,6 +454,11 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
       }, 10000);
     });
     video.addEventListener("loadedmetadata", reportAspectRatio);
+    video.addEventListener("error", () => {
+      const mediaError = video.error;
+      const detail = mediaError ? ` (code ${mediaError.code})` : "";
+      recover(`Live stream decoder error${detail}.`);
+    });
     video.addEventListener("pause", () => { if (socket?.readyState === WebSocket.OPEN && !video.ended) video.play().catch(() => {}); });
     video.addEventListener("timeupdate", () => {
       if (video.currentTime > lastPlaybackTime + 0.05) {

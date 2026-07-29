@@ -1,7 +1,7 @@
 # Releasing FriedasBirdview
 
 FriedasBirdview releases native Linux/KDE and Windows builds. The current
-release preparation is version `1.5.0`. The
+release preparation is version `1.8.0`. The
 `project(... VERSION ...)` value in `CMakeLists.txt` is the single source of
 truth for every release artifact: the Windows Setup filename/version, the
 host-side upload script, and the release-tag validation in GitHub Actions.

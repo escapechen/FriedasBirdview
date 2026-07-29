@@ -1,52 +1,55 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(FriedasBirdview VERSION 1.5.0 LANGUAGES CXX)
+project(FriedasBirdview VERSION 1.8.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(FRIEDASBIRDVIEW_PLATFORM_SOURCES)
+set(FRIEDASBIRDVIEW_QT_COMPONENTS Core Gui Widgets Network Multimedia)
 set(FRIEDASBIRDVIEW_APPLICATION_ID "org.friedasbirdview.FriedasBirdview" CACHE STRING
     "Freedesktop application ID used for installed desktop metadata")
 option(FRIEDASBIRDVIEW_FLATPAK "Build for a Flatpak sandbox" OFF)
-
-find_package(Qt6 6.5 REQUIRED COMPONENTS
-    Core
-    Gui
-    Widgets
-    Network
-    Multimedia
-    WebChannel
-    WebEngineCore
-    WebEngineWidgets
-)
-find_package(OpenSSL REQUIRED)
-
-set(FRIEDASBIRDVIEW_PLATFORM_SOURCES)
-set(FRIEDASBIRDVIEW_WEBENGINE_PROFILE_CUSTOM_CA 0)
 if(WIN32)
     set(FRIEDASBIRDVIEW_ABOUT_PLATFORM "Windows 11")
-    if(Qt6_VERSION VERSION_LESS 6.10.0)
-        message(FATAL_ERROR "The Windows port requires Qt 6.10 or newer for app-scoped WebEngine CA trust.")
-    endif()
     list(APPEND FRIEDASBIRDVIEW_PLATFORM_SOURCES
         src/AutostartManagerWindows.cpp
         src/CredentialStoreWindows.cpp
         src/CustomCaPlatformWindows.cpp
+        src/StreamViewWindows.cpp
     )
-    set(FRIEDASBIRDVIEW_WEBENGINE_PROFILE_CUSTOM_CA 1)
+
+    set(FRIEDASBIRDVIEW_WEBVIEW2_SDK_ROOT "" CACHE PATH
+        "Extracted Microsoft.Web.WebView2 SDK root")
+    if(NOT FRIEDASBIRDVIEW_WEBVIEW2_SDK_ROOT AND DEFINED ENV{WEBVIEW2_SDK_ROOT})
+        set(FRIEDASBIRDVIEW_WEBVIEW2_SDK_ROOT "$ENV{WEBVIEW2_SDK_ROOT}")
+    endif()
+    set(FRIEDASBIRDVIEW_WEBVIEW2_INCLUDE_DIR
+        "${FRIEDASBIRDVIEW_WEBVIEW2_SDK_ROOT}/build/native/include")
+    set(FRIEDASBIRDVIEW_WEBVIEW2_LOADER
+        "${FRIEDASBIRDVIEW_WEBVIEW2_SDK_ROOT}/build/native/x64/WebView2LoaderStatic.lib")
+    if(NOT EXISTS "${FRIEDASBIRDVIEW_WEBVIEW2_INCLUDE_DIR}/WebView2.h"
+        OR NOT EXISTS "${FRIEDASBIRDVIEW_WEBVIEW2_LOADER}")
+        message(FATAL_ERROR
+            "The Microsoft WebView2 SDK is required on Windows. Run packaging/windows/ensure-webview2-sdk.ps1 or set FRIEDASBIRDVIEW_WEBVIEW2_SDK_ROOT.")
+    endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(FRIEDASBIRDVIEW_ABOUT_PLATFORM "KDE Plasma on Linux")
-    find_package(Qt6 6.5 REQUIRED COMPONENTS DBus)
+    list(APPEND FRIEDASBIRDVIEW_QT_COMPONENTS WebChannel WebEngineCore WebEngineWidgets DBus)
     find_package(KF6Wallet 6.0 REQUIRED)
     list(APPEND FRIEDASBIRDVIEW_PLATFORM_SOURCES
         src/AutostartManager.cpp
         src/CredentialStoreLinux.cpp
         src/CustomCaPlatformLinux.cpp
+        src/StreamView.cpp
     )
 else()
     message(FATAL_ERROR "FriedasBirdview currently supports Linux and Windows only.")
 endif()
+
+find_package(Qt6 6.5 REQUIRED COMPONENTS ${FRIEDASBIRDVIEW_QT_COMPONENTS})
+find_package(OpenSSL REQUIRED)
 
 qt_standard_project_setup()
 
@@ -84,7 +87,6 @@ qt_add_executable(friedasbirdview
     src/OverlayWindow.h
     src/SettingsDialog.cpp
     src/SettingsDialog.h
-    src/StreamView.cpp
     src/StreamView.h
     ${FRIEDASBIRDVIEW_PLATFORM_SOURCES}
 )
@@ -102,24 +104,29 @@ target_link_libraries(friedasbirdview PRIVATE
     Qt6::Widgets
     Qt6::Network
     Qt6::Multimedia
-    Qt6::WebChannel
-    Qt6::WebEngineCore
-    Qt6::WebEngineWidgets
     OpenSSL::Crypto
 )
 
 if(WIN32)
-    target_link_libraries(friedasbirdview PRIVATE Advapi32)
+    target_include_directories(friedasbirdview PRIVATE "${FRIEDASBIRDVIEW_WEBVIEW2_INCLUDE_DIR}")
+    target_link_libraries(friedasbirdview PRIVATE
+        Advapi32
+        Ole32
+        Shlwapi
+        "${FRIEDASBIRDVIEW_WEBVIEW2_LOADER}"
+    )
 else()
-    target_link_libraries(friedasbirdview PRIVATE Qt6::DBus KF6::Wallet)
+    target_link_libraries(friedasbirdview PRIVATE
+        Qt6::WebChannel
+        Qt6::WebEngineCore
+        Qt6::WebEngineWidgets
+        Qt6::DBus
+        KF6::Wallet
+    )
 endif()
 
 target_include_directories(friedasbirdview PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/generated"
-)
-
-target_compile_definitions(friedasbirdview PRIVATE
-    FRIEDASBIRDVIEW_WEBENGINE_PROFILE_CUSTOM_CA=${FRIEDASBIRDVIEW_WEBENGINE_PROFILE_CUSTOM_CA}
 )
 
 if(MSVC)

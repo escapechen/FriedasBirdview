@@ -6,6 +6,33 @@ versioning when releases are tagged.
 
 ## [Unreleased]
 
+## [1.8.0]
+
+### Changed
+
+- Windows live playback now uses the Windows 11 Edge WebView2 media stack,
+  restoring H.264 MSE playback without distributing a proprietary codec build
+  of Qt WebEngine.
+
+### Fixed
+
+- Fixed WebView2 live-video sizing on high-DPI Windows displays.
+
+## [1.7.0]
+
+### Fixed
+
+- Live playback now detects a Qt WebEngine build with audio-only MSE support
+  and switches directly to JPEG snapshots instead of repeatedly showing a
+  black video panel.
+
+## [1.6.0]
+
+### Fixed
+
+- Windows live playback now uses Chromium software rendering by default, which
+  avoids black MSE video on virtual machines and affected graphics drivers.
+
 ## [1.5.0]
 
 ### Fixed
@@ -122,3 +149,6 @@ versioning when releases are tagged.
 [1.3.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.3.0
 [1.4.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.4.0
 [1.5.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.5.0
+[1.6.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.6.0
+[1.7.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.7.0
+[1.8.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.8.0

@@ -9,16 +9,24 @@ contains no production connection details or credentials.
 - Linux/KDE is available as a native build and Flatpak bundle.
 - Windows 11 x64 is available as a native CMake/MSVC build and an Inno Setup
   installer with its runtime dependencies included.
-- The CMake project currently reports version `1.5.0`; release it as tag
-  `v1.5.0` after the Windows installer smoke test passes.
+- The CMake project currently reports version `1.8.0`; release it as tag
+  `v1.8.0` after the Windows installer smoke test passes.
 
 ## What is already portable
 
 The Qt Widgets UI, Frigate HTTP client, event filtering, JPEG feed, sound
-notifications, Qt Multimedia, and Qt WebEngine MSE player are shared. Build
-the Windows application with the same CMake project rather than starting a
-separate application. Live MSE playback keeps a bounded near-live buffer and
-automatically falls back to JPEG snapshots when it cannot recover.
+notifications, and Qt Multimedia are shared. Windows uses a native Edge
+WebView2 MSE view, while Linux retains Qt WebEngine. Both keep a bounded
+near-live buffer and automatically fall back to JPEG snapshots when playback
+cannot recover.
+
+### Windows live-video rendering
+
+Windows live video uses Edge WebView2, which accesses the Windows-maintained
+media stack instead of asking FriedasBirdview to distribute H.264/H.265 codec
+libraries. The Evergreen WebView2 runtime is included with Windows 11 and
+receives security updates independently of the app. A missing or incompatible
+runtime leaves JPEG snapshots available with a clear error.
 
 ## Required free software on Windows 11
 
@@ -28,8 +36,8 @@ Install these in this order:
    workload. Include MSVC v143 x64/x86, CMake tools, Ninja, and the Windows 11
    SDK.
 2. The **Qt Online Installer**, open-source edition. Install a 64-bit
-   `msvc2022_64` Qt 6.10-or-newer kit and select Qt WebEngine. The release VM
-   is tested with Qt 6.11.1.
+   `msvc2022_64` Qt 6.5-or-newer kit. Qt WebEngine is not needed for the
+   Windows build. The release VM is tested with Qt 6.11.1.
 3. **Git for Windows** for repository access.
 4. **vcpkg**, then install the CMake-visible OpenSSL development package:
 
@@ -39,25 +47,27 @@ Install these in this order:
    C:\src\vcpkg\vcpkg install openssl:x64-windows
    ```
 
-Allow roughly 25 GB of free disk space. Qt WebEngine and its build artifacts
-are large.
+Allow roughly 10 GB of free disk space for Qt, Visual Studio, vcpkg, and build
+artifacts.
 
 ## First Windows build
 
 Open a Visual Studio Developer PowerShell and adapt `QT_ROOT` to the installed
-kit. Qt 6.10 or newer is required on Windows because WebEngine uses its
-app-scoped additional-CA API:
+kit. The helper downloads only the pinned C++ WebView2 SDK headers/static
+loader; it does not download or package a browser runtime:
 
 ```powershell
 $env:QT_ROOT = 'C:\Qt\6.11.1\msvc2022_64'
+.\packaging\windows\ensure-webview2-sdk.ps1
 cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Debug `
   -DQt6_DIR="$env:QT_ROOT\lib\cmake\Qt6" `
-  -DCMAKE_TOOLCHAIN_FILE=C:\src\vcpkg\scripts\buildsystems\vcpkg.cmake
+  -DCMAKE_TOOLCHAIN_FILE=C:\src\vcpkg\scripts\buildsystems\vcpkg.cmake `
+  -DFRIEDASBIRDVIEW_WEBVIEW2_SDK_ROOT="$env:LOCALAPPDATA\FriedasBirdview\build-tools\webview2-sdk-1.0.4022.49"
 cmake --build build-win
 ```
 
-The project selects its credential, autostart, and WebEngine-CA implementations
-by platform. `KF6Wallet` and Qt DBus are Linux-only build dependencies.
+The project selects its credential, autostart, live-video, and CA-trust paths
+by platform. `KF6Wallet`, Qt DBus, and Qt WebEngine are Linux-only dependencies.
 
 ## Required platform boundaries
 
@@ -68,7 +78,7 @@ implementation. Shared application code should depend only on the interface.
 | --- | --- | --- |
 | Frigate password | KWallet | Windows Credential Manager |
 | Autostart | XDG desktop entry / Flatpak Background portal over DBus | Per-user `HKCU\...\Run` value; no administrator rights |
-| Custom WebEngine CA | Private NSS database managed with `certutil` | Qt 6.10+ app-scoped WebEngine profile trust |
+| Live-video CA trust | Private NSS database managed with `certutil` | Windows Current User certificate store for WebView2 |
 | Build dependencies | Qt DBus and KF6Wallet | Neither is required on Windows |
 
 ### Credentials
@@ -87,25 +97,26 @@ registry key.
 ### Custom certificate authorities
 
 The NSS `certutil` commands and private NSS database remain Linux-specific;
-Windows `certutil.exe` is not a replacement. With Qt 6.10 or newer, the app
-passes validated custom CA certificates to the dedicated WebEngine profile as
-additional trust anchors. It does not alter either Windows certificate store.
-Qt Network receives the same CAs through its request TLS configuration. Normal
-hostname and expiry validation remain enabled.
+Windows `certutil.exe` is not a replacement. Qt Network uses the app-selected
+custom CAs for Frigate API and JPEG requests. Edge WebView2 deliberately uses
+the Windows Current User certificate store for MSE video, so import Frigate’s
+issuing CA there when needed. FriedasBirdview does not add a root CA to the
+system store or bypass host-name, expiry, or certificate-chain validation.
 
 ### CMake layout
 
-Platform sources are selected in CMake. `Qt6::DBus` and `KF6::Wallet` are found
-and linked only for Linux. The common target requires Qt Core, Gui, Widgets,
-Network, Multimedia, WebChannel, WebEngineCore, WebEngineWidgets, and OpenSSL.
-Windows links only the native Credential Manager library in addition.
+Platform sources are selected in CMake. `Qt6::DBus`, `KF6::Wallet`, and Qt
+WebEngine are Linux-only. Windows links the pinned Microsoft WebView2 SDK's
+static loader plus the native Credential Manager library. The first package
+build downloads that SDK from NuGet to the current user's build-tools cache,
+verifies its pinned SHA-256, and does not include it in the installer.
 
 ## Deployment and end-user packaging
 
 After a Release build succeeds, use the `windeployqt.exe` belonging to the same
-Qt kit from a Visual Studio developer shell. It collects Qt DLLs,
-QtWebEngineProcess, resources, locales, and `vc_redist.x64.exe`. Do not
-hand-copy DLLs from the build tree.
+Qt kit from a Visual Studio developer shell. It collects Qt DLLs and
+`vc_redist.x64.exe`; WebView2 comes from Windows rather than the deployment
+directory. Do not hand-copy DLLs from the build tree.
 
 ```powershell
 & "$env:QT_ROOT\bin\windeployqt.exe" --release --compiler-runtime `

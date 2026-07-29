@@ -2,14 +2,22 @@
 param(
     [string]$QtRoot = $env:QT_ROOT,
     [string]$VcpkgRoot = 'C:\src\vcpkg',
-    [string]$BuildDirectory = (Join-Path $PSScriptRoot '..\..\build-win-package'),
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\dist'),
+    [string]$WebView2SdkRoot,
+    [string]$BuildDirectory,
+    [string]$OutputDirectory,
     [string]$SigningCertificateThumbprint = $env:FRIEDASBIRDVIEW_SIGNING_CERT_THUMBPRINT,
     [string]$TimestampUrl,
     [switch]$SkipInstaller
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($BuildDirectory)) {
+    $BuildDirectory = Join-Path $PSScriptRoot '..\..\build-win-package'
+}
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    $OutputDirectory = Join-Path $PSScriptRoot '..\..\dist'
+}
 
 function Invoke-Checked {
     param(
@@ -126,6 +134,11 @@ if ([string]::IsNullOrWhiteSpace($env:VCToolsRedistDir)) {
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $buildDirectory = [System.IO.Path]::GetFullPath($BuildDirectory)
 $outputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
+$webView2SdkScript = Join-Path $PSScriptRoot 'ensure-webview2-sdk.ps1'
+if ([string]::IsNullOrWhiteSpace($WebView2SdkRoot)) {
+    $WebView2SdkRoot = (& $webView2SdkScript | Select-Object -Last 1).Trim()
+}
+$WebView2SdkRoot = [System.IO.Path]::GetFullPath($WebView2SdkRoot)
 $qt6Directory = Join-Path $QtRoot 'lib\cmake\Qt6'
 $toolchainFile = Join-Path $VcpkgRoot 'scripts\buildsystems\vcpkg.cmake'
 $windeployqt = Join-Path $QtRoot 'bin\windeployqt.exe'
@@ -139,7 +152,14 @@ if (-not [string]::IsNullOrWhiteSpace($SigningCertificateThumbprint)) {
     }
 }
 
-foreach ($path in @($qt6Directory, $toolchainFile, $windeployqt)) {
+foreach ($path in @(
+    $qt6Directory,
+    $toolchainFile,
+    $windeployqt,
+    $webView2SdkScript,
+    (Join-Path $WebView2SdkRoot 'build\native\include\WebView2.h'),
+    (Join-Path $WebView2SdkRoot 'build\native\x64\WebView2LoaderStatic.lib')
+)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required packaging input is missing: $path"
     }
@@ -158,7 +178,8 @@ Invoke-Checked cmake @(
     '-G', 'Ninja',
     '-DCMAKE_BUILD_TYPE=Release',
     "-DQt6_DIR=$qt6Directory",
-    "-DCMAKE_TOOLCHAIN_FILE=$toolchainFile"
+    "-DCMAKE_TOOLCHAIN_FILE=$toolchainFile",
+    "-DFRIEDASBIRDVIEW_WEBVIEW2_SDK_ROOT=$WebView2SdkRoot"
 )
 Invoke-Checked cmake @('--build', $buildDirectory, '--parallel')
 

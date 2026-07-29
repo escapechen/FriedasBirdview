@@ -50,7 +50,8 @@ the project maintainer.
   Widgets, Network, Multimedia, WebChannel, and WebEngineWidgets), and KF6
   Wallet development packages.
 - **Windows:** Windows 11 x64. The Setup installer includes Qt, the Microsoft
-  C++ runtime, and OpenSSL; no developer tools are needed to run it.
+  C++ runtime, and OpenSSL; live video uses the Windows 11 WebView2 runtime,
+  which is supplied and updated by Windows. No developer tools are needed.
 - A reachable [Frigate NVR](https://github.com/blakeblackshear/frigate) server.
 - A certificate the operating system trusts, or its issuing CA certificate for
   the in-app custom-CA picker. FriedasBirdview deliberately keeps normal TLS
@@ -144,11 +145,13 @@ tray state; it never terminates the app.
   saved position can be restored without manual KWin rules.
 
 For **Live stream**, the selected camera needs a working Frigate/go2rtc MSE
-restream and a codec Chromium can play. FriedasBirdview uses the Frigate
+restream and a codec the platform player can play. FriedasBirdview uses the Frigate
 configuration mapping `cameras.<camera>.live.streams`; a camera name is not
 assumed to be the go2rtc stream name. It keeps playback near the live edge and
 automatically switches to **JPEG snapshots** after incompatible, stalled, or
-repeatedly failed live playback.
+repeatedly failed live playback. Windows uses Edge WebView2 for live playback,
+so it uses the H.264 support
+already maintained by Windows rather than bundling a proprietary codec library.
 
 ## Important Frigate distinction
 
@@ -168,8 +171,8 @@ records and filters them by object classification.
 | Password cannot be saved | On Linux, enable and unlock KDE Wallet; on Windows, check Credential Manager access for the current user. Then apply the settings again. |
 | The app does not start after sign-in | Confirm the **Startup** switch is enabled. Linux native installs use XDG autostart, Flatpak requires desktop Background portal approval, and Windows uses the current user’s startup entry. Re-enable after moving a native Linux executable. |
 | No sound is heard | Enable **Sound alerts**, use **Preview**, and check the desktop output device and volume. |
-| Private CA works for JPEG but not live video | Add the issuing CA in **Custom certificate authorities**, then fully restart FriedasBirdview. Native packages require the NSS `certutil` tool; the Flatpak includes it. |
-| Live stream is black or frozen | Confirm the stream plays in Frigate and a compatible go2rtc codec is available. The app retries then switches to JPEG snapshots; choose JPEG directly if you prefer not to retry live playback. |
+| Private CA works for JPEG but not live video on Windows | WebView2 trusts the Windows Current User certificate store. Import Frigate’s issuing CA there; FriedasBirdview never bypasses certificate validation. Linux native packages use the private NSS database, and the Flatpak includes `certutil`. |
+| Live stream switches to JPEG | Confirm the stream plays in Frigate and a compatible go2rtc codec is available. The stock Windows Qt WebEngine may lack H.264/H.265 support; FriedasBirdview then falls back immediately rather than showing a black panel. |
 | Feed is on the wrong screen | Drag it to the intended display once. On Wayland placement is ultimately controlled by KWin. |
 
 ## Project notes
