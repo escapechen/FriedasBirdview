@@ -6,6 +6,38 @@ versioning when releases are tagged.
 
 ## [Unreleased]
 
+## [1.2.0]
+
+### Added
+
+- A shared KDE/Windows About dialog with app icon, exact build version, GitHub
+  repository, changelog link, credits, and licence information.
+
+## [1.1.0]
+
+### Added
+
+- Native Windows 11 build support with Windows Credential Manager password
+  storage, per-user startup registration, and app-scoped custom-CA trust.
+- An Inno Setup installer that includes the Qt deployment, Microsoft C++
+  runtime, vcpkg OpenSSL runtime, Start-menu shortcut, and uninstaller.
+- A host-side release handoff that builds on the configured Windows VM,
+  verifies the downloaded installer checksum, and can upload it to GitHub.
+
+### Security
+
+- Windows builds enable MSVC `/sdl` and Control Flow Guard, plus ASLR, DEP,
+  and high-entropy address-space linker mitigations.
+- Release actions are pinned to immutable revisions, and project screenshots
+  contain no deployment-specific connection or camera information.
+
+### Fixed
+
+- Windows installers now include `libcrypto` and `libssl` from vcpkg instead
+  of failing at startup when the OpenSSL runtime is unavailable.
+
+## [1.0.1]
+
 ### Added
 
 - Optional XDG-standard automatic start at desktop sign-in, configurable from
@@ -61,3 +93,6 @@ versioning when releases are tagged.
   logs or project files.
 
 [1.0.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.0.0
+[1.0.1]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.0.1
+[1.1.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.1.0
+[1.2.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.2.0

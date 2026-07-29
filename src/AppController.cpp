@@ -1,17 +1,23 @@
 #include "AppController.h"
 
+#include "AppBuildConfig.h"
 #include "OverlayWindow.h"
 #include "SettingsDialog.h"
 
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFont>
+#include <QFrame>
 #include <QIcon>
 #include <QKeySequence>
+#include <QLabel>
 #include <QMenu>
-#include <QMessageBox>
 #include <QStyle>
 #include <QSystemTrayIcon>
+#include <QVBoxLayout>
 
 namespace {
 QIcon normalIcon()
@@ -24,7 +30,7 @@ AppController::AppController(QObject *parent)
     : QObject(parent)
     , m_monitor(this)
     , m_autostart(this)
-    , m_overlay(new OverlayWindow)
+    , m_overlay(new OverlayWindow(m_monitor.customCaTrustAnchors()))
     , m_settings(new SettingsDialog(&m_monitor, &m_autostart))
     , m_tray(new QSystemTrayIcon(normalIcon(), this))
     , m_menu(new QMenu)
@@ -144,15 +150,80 @@ void AppController::updateTray(FrigateMonitor::ConnectionState state)
 
 void AppController::showAbout()
 {
-    QMessageBox::about(
-        m_settings,
-        QStringLiteral("About FriedasBirdview"),
-        QStringLiteral(
-            "<h3>FriedasBirdview</h3>"
-            "<p>A small KDE Plasma activity companion compatible with Frigate.</p>"
-            "<p>Built by Marcel Kühn with OpenAI Codex<br>"
-            "GPT-5.6 Terra · Extra High reasoning</p>"
-            "<p>Released under the MIT License.</p>"
-        )
+    QDialog dialog(m_settings);
+    dialog.setWindowTitle(QStringLiteral("About FriedasBirdview"));
+    dialog.setWindowIcon(normalIcon());
+    dialog.setMinimumWidth(520);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(32, 28, 32, 24);
+    layout->setSpacing(12);
+
+    auto *icon = new QLabel(&dialog);
+    icon->setPixmap(normalIcon().pixmap(112, 112));
+    icon->setAlignment(Qt::AlignHCenter);
+    layout->addWidget(icon);
+
+    auto *title = new QLabel(QStringLiteral("FriedasBirdview"), &dialog);
+    QFont titleFont = title->font();
+    titleFont.setPointSize(22);
+    titleFont.setBold(true);
+    title->setFont(titleFont);
+    title->setAlignment(Qt::AlignHCenter);
+    layout->addWidget(title);
+
+    auto *version = new QLabel(
+        QStringLiteral("Version %1").arg(QString::fromLatin1(FRIEDASBIRDVIEW_VERSION)),
+        &dialog
     );
+    version->setAlignment(Qt::AlignHCenter);
+    layout->addWidget(version);
+
+    auto *description = new QLabel(
+        QStringLiteral("A small %1 activity companion compatible with Frigate.")
+            .arg(QString::fromLatin1(FRIEDASBIRDVIEW_ABOUT_PLATFORM)),
+        &dialog
+    );
+    description->setWordWrap(true);
+    description->setAlignment(Qt::AlignHCenter);
+    layout->addWidget(description);
+
+    auto *separator = new QFrame(&dialog);
+    separator->setFrameShape(QFrame::HLine);
+    separator->setFrameShadow(QFrame::Sunken);
+    layout->addWidget(separator);
+
+    auto *links = new QLabel(
+        QStringLiteral(
+            "<a href=\"https://github.com/escapechen/FriedasBirdview\">"
+            "FriedasBirdview on GitHub</a><br>"
+            "<a href=\"https://github.com/escapechen/FriedasBirdview/blob/main/CHANGELOG.md\">"
+            "View changelog</a>"
+        ),
+        &dialog
+    );
+    links->setTextFormat(Qt::RichText);
+    links->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    links->setOpenExternalLinks(true);
+    links->setAlignment(Qt::AlignHCenter);
+    layout->addWidget(links);
+
+    auto *credits = new QLabel(
+        QStringLiteral(
+            "Built by Marcel Kühn with OpenAI Codex<br>"
+            "GPT-5.6 Terra · Extra High reasoning<br><br>"
+            "With thanks to Frigate and its open-source community.<br><br>"
+            "Released under the MIT License."
+        ),
+        &dialog
+    );
+    credits->setTextFormat(Qt::RichText);
+    credits->setAlignment(Qt::AlignHCenter);
+    layout->addWidget(credits);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    dialog.exec();
 }

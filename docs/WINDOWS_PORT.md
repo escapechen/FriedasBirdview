@@ -6,11 +6,11 @@ it contains no production connection details or credentials.
 
 ## Status
 
-- Linux/KDE and Flatpak are the current supported targets.
+- Linux/KDE and Flatpak are the current supported release targets.
 - The public `v1.0.1` release is a Linux Flatpak release.
-- No Windows-specific source or installer exists yet.
-- The CMake project currently reports version `1.0.0`; align that internal
-  version with the next release tag before making a Windows release.
+- Windows has a native CMake/MSVC build path. It is not packaged or released yet.
+- The CMake project currently reports version `1.2.0`; release it only as tag
+  `v1.2.0` after the Windows installer smoke test passes.
 
 ## What is already portable
 
@@ -43,20 +43,20 @@ are large.
 
 ## First Windows build
 
-Do this only after the platform dependency changes below have landed. Open a
-Visual Studio Developer PowerShell and adapt `QT_ROOT` to the installed kit:
+Open a Visual Studio Developer PowerShell and adapt `QT_ROOT` to the installed
+kit. Qt 6.10 or newer is required on Windows because WebEngine uses its
+app-scoped additional-CA API:
 
 ```powershell
 $env:QT_ROOT = 'C:\Qt\6.10.0\msvc2022_64'
 cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Debug `
-  -DCMAKE_PREFIX_PATH="$env:QT_ROOT" `
+  -DQt6_DIR="$env:QT_ROOT\lib\cmake\Qt6" `
   -DCMAKE_TOOLCHAIN_FILE=C:\src\vcpkg\scripts\buildsystems\vcpkg.cmake
 cmake --build build-win
 ```
 
-The current project cannot configure unchanged on Windows, because Linux-only
-dependencies are required unconditionally. That is the first porting task,
-not a tool-installation failure.
+The project selects its credential, autostart, and WebEngine-CA implementations
+by platform. `KF6Wallet` and Qt DBus are Linux-only build dependencies.
 
 ## Required platform boundaries
 
@@ -65,57 +65,128 @@ implementation. Shared application code should depend only on the interface.
 
 | Concern | Current Linux implementation | Windows target |
 | --- | --- | --- |
-| Frigate password | KWallet | Windows Credential Manager or DPAPI-backed credential store |
-| Autostart | XDG desktop entry / Flatpak Background portal over DBus | Per-user Windows startup registration; no administrator rights |
-| Custom WebEngine CA | Private NSS database managed with `certutil` | A dedicated, security-reviewed Windows trust strategy |
-| Build dependencies | Qt DBus and KF6Wallet required by CMake | Do not require either on Windows |
+| Frigate password | KWallet | Windows Credential Manager |
+| Autostart | XDG desktop entry / Flatpak Background portal over DBus | Per-user `HKCU\...\Run` value; no administrator rights |
+| Custom WebEngine CA | Private NSS database managed with `certutil` | Qt 6.10+ app-scoped WebEngine profile trust |
+| Build dependencies | Qt DBus and KF6Wallet | Neither is required on Windows |
 
 ### Credentials
 
-Introduce a `CredentialStore` abstraction. The existing KWallet behavior
-becomes the Linux implementation; Windows uses the built-in Credential Manager
-or DPAPI. The server URL and user name may stay in `QSettings`, but the password
-must never do so.
+`CredentialStore` keeps the existing KWallet behavior on Linux and uses a
+Windows Credential Manager generic credential on Windows. The server URL and
+user name may stay in `QSettings`, but the password must never do so.
 
 ### Autostart
 
-Keep the existing Linux/Flatpak behavior. On Windows, use a per-user startup
-mechanism (normally the `HKCU` `Run` registry key) and quote the executable
-path safely. Do not require elevation, create a scheduled task, or use a
-machine-wide registry key.
+Keep the existing Linux/Flatpak behavior. On Windows the app stores one safely
+quoted executable path in the current user's `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+key. Do not require elevation, create a scheduled task, or use a machine-wide
+registry key.
 
 ### Custom certificate authorities
 
-The present NSS `certutil` commands and private NSS database are Linux-specific;
-Windows `certutil.exe` is not a compatible replacement. Preserve normal TLS
-validation for both Qt Network and Qt WebEngine. First determine whether the
-target Qt WebEngine version supports app-scoped trust on Windows. If Windows
-requires a Current User root-store import for WebEngine, present that as an
-explicit, clearly scoped user choice rather than doing it silently. Continue to
-accept only valid CA certificates and remove only certificates that this app
-added.
+The NSS `certutil` commands and private NSS database remain Linux-specific;
+Windows `certutil.exe` is not a replacement. With Qt 6.10 or newer, the app
+passes validated custom CA certificates to the dedicated WebEngine profile as
+additional trust anchors. It does not alter either Windows certificate store.
+Qt Network receives the same CAs through its request TLS configuration. Normal
+hostname and expiry validation remain enabled.
 
 ### CMake layout
 
-Split platform sources in CMake. `Qt6::DBus` and `KF6::Wallet` must be found and
-linked only for Linux. The common target should continue to require Qt Core,
-Gui, Widgets, Network, Multimedia, WebChannel, WebEngineWidgets, and OpenSSL.
-Do not make the Windows build depend on KDE Frameworks.
+Platform sources are selected in CMake. `Qt6::DBus` and `KF6::Wallet` are found
+and linked only for Linux. The common target requires Qt Core, Gui, Widgets,
+Network, Multimedia, WebChannel, WebEngineCore, WebEngineWidgets, and OpenSSL.
+Windows links only the native Credential Manager library in addition.
 
-## Deployment and packaging
+## Deployment and end-user packaging
 
 After a Release build succeeds, use the `windeployqt.exe` belonging to the same
-Qt kit to collect Qt DLLs, QtWebEngineProcess, resources, locales, and the MSVC
-runtime. Do not hand-copy DLLs from the build tree.
+Qt kit from a Visual Studio developer shell. It collects Qt DLLs,
+QtWebEngineProcess, resources, locales, and `vc_redist.x64.exe`. Do not
+hand-copy DLLs from the build tree.
 
 ```powershell
 & "$env:QT_ROOT\bin\windeployqt.exe" --release --compiler-runtime `
   .\build-win\friedasbirdview.exe
 ```
 
-Add a Windows installer only after the deployed directory works on a clean VM.
-An NSIS/CPack or Inno Setup installer is sufficient; keep it separate from the
-Flatpak and Gentoo packaging.
+`packaging/windows/package.ps1` produces the release deployment directory, then
+creates an Inno Setup `Setup.exe` when Inno Setup 6 is installed. It packages
+all `windeployqt` output, installs the Microsoft C++ Redistributable, adds a
+Start-menu shortcut, and provides an uninstaller. It deliberately preserves
+per-user settings and Credential Manager passwords on uninstall. Qt deployment
+does not discover vcpkg runtime dependencies, so the script also copies the
+matching vcpkg OpenSSL `libcrypto` and `libssl` DLLs.
+
+Install Inno Setup 6 on the build machine once, for example with:
+
+```powershell
+winget install JRSoftware.InnoSetup
+```
+
+Then, from the same Visual Studio Developer PowerShell used to build:
+
+```powershell
+$env:QT_ROOT = 'C:\Qt\6.10.0\msvc2022_64'
+.\packaging\windows\package.ps1
+```
+
+The installer needs one UAC elevation to install the recommended centrally
+serviced Microsoft C++ runtime. End users do not need Qt, Visual Studio, vcpkg,
+or Git. Use `-SkipInstaller` to create only the deployed directory; if Inno
+Setup is absent, the script creates a portable ZIP as a fallback.
+
+### Development signing
+
+For local Windows development only, create a non-exportable test root and a
+code-signing certificate issued by it. The command trusts the public root for
+the current Windows user only:
+
+```powershell
+.\packaging\windows\new-dev-signing-certificate.ps1 -TrustForCurrentUser
+```
+
+If a Windows root-store policy blocks the non-interactive import, rerun with
+`-ExportPublicCertificatePath C:\Temp\FriedasBirdview-development-root.cer`,
+then import that file in `certmgr.msc` under **Certificates - Current User** >
+**Trusted Root Certification Authorities**. Accept the warning only on a
+disposable development machine.
+
+Pass the printed thumbprint to the package command. This signs the application
+executable before Inno Setup runs, then signs and verifies the final installer:
+
+```powershell
+.\packaging\windows\package.ps1 -SigningCertificateThumbprint <thumbprint>
+```
+
+The private keys never leave `Cert:\CurrentUser\My`; only export the public
+root `.cer` file when a separate development VM needs to trust this test
+signature. This trust is local to that user and must never be used for public
+releases. Production releases need a publicly trusted signing provider and an
+RFC-3161 timestamp.
+
+### Host-side release handoff
+
+`build-and-install-windows.sh` runs the package build and CTest checks over SSH
+on a configured Windows VM, downloads the Setup installer and a SHA-256
+manifest, verifies the downloaded hash locally, and can attach both assets to
+an existing GitHub Release. It does not create tags, commits, or releases.
+
+```sh
+cp build-and-install-windows.conf.example build-and-install-windows.conf
+chmod 600 build-and-install-windows.conf
+# Edit only the ignored local config, then ensure the Windows checkout is clean
+# and checked out at the same release tag.
+./build-and-install-windows.sh v1.2.3
+./build-and-install-windows.sh --publish v1.2.3
+```
+
+The tag must exactly match the CMake version (`v1.2.3` for `1.2.3`). The script
+fails if the VM checkout is dirty, not at that tag, CTest fails, no CTest tests
+are registered (unless explicitly allowed in the ignored config), the hashes do
+not match, or the GitHub Release does not already exist. Local assets are kept
+under ignored `dist/windows/<tag>/`.
 
 ## Verification checklist
 
@@ -130,4 +201,3 @@ Flatpak and Gentoo packaging.
 - Confirm JPEG and MSE feeds, popup geometry, sound, cooldowns, and close/
   focus behavior match the Linux version.
 - Rebuild and smoke-test Linux before merging.
-

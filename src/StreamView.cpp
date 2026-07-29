@@ -10,6 +10,9 @@
 #include <QWebEngineCookieStore>
 #include <QWebEnginePage>
 #include <QWebEngineProfile>
+#if FRIEDASBIRDVIEW_WEBENGINE_PROFILE_CUSTOM_CA
+#include <QWebEngineProfileBuilder>
+#endif
 #include <QWebEngineSettings>
 #include <QWebEngineView>
 
@@ -74,17 +77,27 @@ void StreamBridge::connected()
     emit streamConnected();
 }
 
-StreamView::StreamView(QWidget *parent)
+StreamView::StreamView(const QList<QSslCertificate> &customCaCertificates, QWidget *parent)
     : QWidget(parent)
-    , m_profile(new QWebEngineProfile(this))
     , m_view(new QWebEngineView(this))
-    , m_page(new StreamPage(m_profile, m_view, [this] {
-        emit errorChanged(QStringLiteral("The live-stream player could not start."));
-    }))
     , m_channel(new QWebChannel(this))
     , m_bridge(new StreamBridge(this))
 {
+#if FRIEDASBIRDVIEW_WEBENGINE_PROFILE_CUSTOM_CA
+    QWebEngineProfileBuilder profileBuilder;
+    profileBuilder.setAdditionalTrustedCertificates(customCaCertificates);
+    profileBuilder.setPersistentCookiesPolicy(QWebEngineProfile::NoPersistentCookies);
+    profileBuilder.setHttpCacheType(QWebEngineProfile::MemoryHttpCache);
+    m_profile = profileBuilder.createProfile(QStringLiteral("friedasbirdview-stream"), this);
+#else
+    Q_UNUSED(customCaCertificates)
+    m_profile = new QWebEngineProfile(this);
     m_profile->setPersistentCookiesPolicy(QWebEngineProfile::NoPersistentCookies);
+#endif
+    m_page = new StreamPage(m_profile, m_view, [this] {
+        emit errorChanged(QStringLiteral("The live-stream player could not start."));
+    });
+
     m_profile->settings()->setAttribute(QWebEngineSettings::JavascriptEnabled, true);
     m_profile->settings()->setAttribute(QWebEngineSettings::PlaybackRequiresUserGesture, false);
 

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <QList>
 #include <QPixmap>
+#include <QSslCertificate>
 #include <QWidget>
 
 #include "FrigateMonitor.h"
@@ -16,7 +18,7 @@ class OverlayWindow final : public QWidget {
     Q_OBJECT
 
 public:
-    explicit OverlayWindow(QWidget *parent = nullptr);
+    explicit OverlayWindow(const QList<QSslCertificate> &customCaCertificates, QWidget *parent = nullptr);
 
     void setMonitor(FrigateMonitor *monitor);
     void present();

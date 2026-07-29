@@ -29,12 +29,6 @@ private:
     void save() const;
     QString certificateDirectory() const;
     QString certificatePath(const QString &id) const;
-    QString nssDatabasePath() const;
-    QString nssNickname(const QString &id) const;
-    bool initializeNssDatabase(QString *error) const;
-    bool importIntoNss(const QString &id, const QString &certificatePath, QString *error) const;
-    bool removeFromNss(const QString &id, QString *error) const;
-    bool runCertutil(const QStringList &arguments, QString *error) const;
     static bool isCertificateAuthority(const QSslCertificate &certificate);
     static QString certificateId(const QSslCertificate &certificate);
     static QString certificateLabel(const QSslCertificate &certificate, const QString &id);

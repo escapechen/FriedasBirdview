@@ -1,7 +1,5 @@
 #include "FrigateMonitor.h"
 
-#include <KWallet>
-
 #include <QAudioDevice>
 #include <QAudioFormat>
 #include <QAudioSink>
@@ -25,12 +23,10 @@
 #include <cstring>
 #include <functional>
 #include <limits>
-#include <memory>
 #include <numbers>
 
 namespace {
 constexpr auto kDefaultServerAddress = "https://frigate.invalid";
-constexpr auto kWalletFolder = "FriedasBirdview";
 constexpr int kMaximumSeenActivityIds = 512;
 
 QString trim(const QString &value)
@@ -343,6 +339,11 @@ QList<QNetworkCookie> FrigateMonitor::authenticationCookies() const
 QList<CustomCaStore::Entry> FrigateMonitor::customCaCertificates() const
 {
     return m_customCaStore.entries();
+}
+
+QList<QSslCertificate> FrigateMonitor::customCaTrustAnchors() const
+{
+    return m_customCaStore.certificates();
 }
 
 bool FrigateMonitor::addCustomCaCertificate(const QString &filePath, QString *summary, QString *error)
@@ -1393,19 +1394,7 @@ bool FrigateMonitor::updateCredentials(const QString &newUsername, const QString
 
 bool FrigateMonitor::loadPassword(const QString &username, QString *password, QString *error) const
 {
-    if (!KWallet::Wallet::isEnabled()) {
-        *error = QStringLiteral("KDE Wallet is unavailable. Enable KWallet to use a Frigate login.");
-        return false;
-    }
-    std::unique_ptr<KWallet::Wallet> wallet(KWallet::Wallet::openWallet(KWallet::Wallet::LocalWallet(), 0));
-    if (!wallet || !wallet->isOpen() || !wallet->hasFolder(QString::fromLatin1(kWalletFolder))
-        || !wallet->setFolder(QString::fromLatin1(kWalletFolder))
-        || !wallet->hasEntry(walletKey(username))
-        || wallet->readPassword(walletKey(username), *password) != 0) {
-        *error = QStringLiteral("Enter the Frigate password.");
-        return false;
-    }
-    return true;
+    return m_credentials.loadPassword(credentialKey(username), password, error);
 }
 
 bool FrigateMonitor::hasStoredPassword(const QString &username, QString *error) const
@@ -1416,53 +1405,15 @@ bool FrigateMonitor::hasStoredPassword(const QString &username, QString *error) 
 
 bool FrigateMonitor::savePassword(const QString &username, const QString &password, QString *error) const
 {
-    if (!KWallet::Wallet::isEnabled()) {
-        *error = QStringLiteral("KDE Wallet is unavailable. Enable KWallet to use a Frigate login.");
-        return false;
-    }
-    std::unique_ptr<KWallet::Wallet> wallet(KWallet::Wallet::openWallet(KWallet::Wallet::LocalWallet(), 0));
-    if (!wallet || !wallet->isOpen()) {
-        *error = QStringLiteral("Could not access KDE Wallet.");
-        return false;
-    }
-    const QString folder = QString::fromLatin1(kWalletFolder);
-    if (!wallet->hasFolder(folder) && !wallet->createFolder(folder)) {
-        *error = QStringLiteral("Could not create the FriedasBirdview KDE Wallet folder.");
-        return false;
-    }
-    if (!wallet->setFolder(folder) || wallet->writePassword(walletKey(username), password) != 0) {
-        *error = QStringLiteral("Could not save the Frigate password in KDE Wallet.");
-        return false;
-    }
-    return true;
+    return m_credentials.savePassword(credentialKey(username), password, error);
 }
 
 bool FrigateMonitor::deletePassword(const QString &username, QString *error) const
 {
-    if (!KWallet::Wallet::isEnabled()) {
-        return true;
-    }
-    std::unique_ptr<KWallet::Wallet> wallet(KWallet::Wallet::openWallet(KWallet::Wallet::LocalWallet(), 0));
-    if (!wallet || !wallet->isOpen()) {
-        *error = QStringLiteral("Could not access KDE Wallet.");
-        return false;
-    }
-    const QString folder = QString::fromLatin1(kWalletFolder);
-    if (!wallet->hasFolder(folder)) {
-        return true;
-    }
-    if (!wallet->setFolder(folder)) {
-        *error = QStringLiteral("Could not access the FriedasBirdview KDE Wallet folder.");
-        return false;
-    }
-    if (wallet->hasEntry(walletKey(username)) && wallet->removeEntry(walletKey(username)) != 0) {
-        *error = QStringLiteral("Could not remove the old Frigate password from KDE Wallet.");
-        return false;
-    }
-    return true;
+    return m_credentials.deletePassword(credentialKey(username), error);
 }
 
-QString FrigateMonitor::walletKey(const QString &username) const
+QString FrigateMonitor::credentialKey(const QString &username) const
 {
     return QStringLiteral("frigate-password-")
         + QString::fromLatin1(QCryptographicHash::hash(username.toUtf8(), QCryptographicHash::Sha256).toHex());

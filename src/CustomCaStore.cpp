@@ -1,10 +1,9 @@
 #include "CustomCaStore.h"
+#include "CustomCaPlatform.h"
 
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
-#include <QFileInfo>
-#include <QProcess>
 #include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
@@ -17,7 +16,6 @@
 namespace {
 constexpr auto kSettingsIds = "tls/customCaIds";
 constexpr auto kSettingsLabelPrefix = "tls/customCaLabels/";
-constexpr auto kNssNicknamePrefix = "FriedasBirdview-CA-";
 
 bool isSafeId(const QString &id)
 {
@@ -113,10 +111,10 @@ bool CustomCaStore::addFromFile(const QString &filePath, QString *summary, QStri
             *error = QStringLiteral("FriedasBirdview could not save the selected CA certificate.");
             break;
         }
-        QString nssError;
-        if (!importIntoNss(entry.entry.id, path, &nssError)) {
+        QString platformError;
+        if (!CustomCaPlatform::install(entry.entry.id, path, &platformError)) {
             QFile::remove(path);
-            *error = nssError;
+            *error = platformError;
             break;
         }
         completed.append(entry);
@@ -125,7 +123,7 @@ bool CustomCaStore::addFromFile(const QString &filePath, QString *summary, QStri
     if (completed.size() != pending.size()) {
         for (const StoredCertificate &entry : completed) {
             QString ignored;
-            removeFromNss(entry.entry.id, &ignored);
+            CustomCaPlatform::remove(entry.entry.id, &ignored);
             QFile::remove(certificatePath(entry.entry.id));
         }
         return false;
@@ -148,7 +146,7 @@ bool CustomCaStore::remove(const QString &id, QString *error)
         *error = QStringLiteral("That custom CA certificate is no longer available.");
         return false;
     }
-    if (!removeFromNss(id, error)) {
+    if (!CustomCaPlatform::remove(id, error)) {
         return false;
     }
     if (!QFile::remove(certificatePath(id))) {
@@ -207,81 +205,6 @@ QString CustomCaStore::certificateDirectory() const
 QString CustomCaStore::certificatePath(const QString &id) const
 {
     return QDir(certificateDirectory()).filePath(id + QStringLiteral(".pem"));
-}
-
-QString CustomCaStore::nssDatabasePath() const
-{
-    return QDir(QDir::homePath()).filePath(QStringLiteral(".pki/nssdb"));
-}
-
-QString CustomCaStore::nssNickname(const QString &id) const
-{
-    return QString::fromLatin1(kNssNicknamePrefix) + id;
-}
-
-bool CustomCaStore::initializeNssDatabase(QString *error) const
-{
-    const QString database = nssDatabasePath();
-    if (!QDir().mkpath(database)) {
-        *error = QStringLiteral("FriedasBirdview could not create the WebEngine certificate database.");
-        return false;
-    }
-    if (QFileInfo::exists(QDir(database).filePath(QStringLiteral("cert9.db")))) {
-        return true;
-    }
-    return runCertutil({QStringLiteral("-N"), QStringLiteral("-d"), QStringLiteral("sql:") + database,
-        QStringLiteral("--empty-password")}, error);
-}
-
-bool CustomCaStore::importIntoNss(const QString &id, const QString &path, QString *error) const
-{
-    if (!initializeNssDatabase(error)) {
-        return false;
-    }
-    const QString database = QStringLiteral("sql:") + nssDatabasePath();
-    const QStringList arguments{
-        QStringLiteral("-A"), QStringLiteral("-d"), database,
-        QStringLiteral("-n"), nssNickname(id),
-        QStringLiteral("-t"), QStringLiteral("C,,"),
-        QStringLiteral("-i"), path,
-    };
-    return runCertutil(arguments, error);
-}
-
-bool CustomCaStore::removeFromNss(const QString &id, QString *error) const
-{
-    const QStringList arguments{
-        QStringLiteral("-D"), QStringLiteral("-d"), QStringLiteral("sql:") + nssDatabasePath(),
-        QStringLiteral("-n"), nssNickname(id),
-    };
-    return runCertutil(arguments, error);
-}
-
-bool CustomCaStore::runCertutil(const QStringList &arguments, QString *error) const
-{
-    const QString executable = QStandardPaths::findExecutable(QStringLiteral("certutil"));
-    if (executable.isEmpty()) {
-        *error = QStringLiteral("The NSS certutil tool is required to configure Qt WebEngine trust, but it is not installed.");
-        return false;
-    }
-    QProcess process;
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(executable, arguments);
-    if (!process.waitForStarted(3000)) {
-        *error = QStringLiteral("FriedasBirdview could not start the NSS certificate tool.");
-        return false;
-    }
-    if (!process.waitForFinished(10000)) {
-        process.kill();
-        process.waitForFinished(1000);
-        *error = QStringLiteral("The NSS certificate tool did not finish in time.");
-        return false;
-    }
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-        *error = QStringLiteral("The selected CA certificate could not be added to Qt WebEngine trust.");
-        return false;
-    }
-    return true;
 }
 
 bool CustomCaStore::isCertificateAuthority(const QSslCertificate &certificate)

@@ -1,0 +1,26 @@
+# Copy to build-and-install-windows.conf, fill in local values, then protect it
+# with: chmod 600 build-and-install-windows.conf
+# This file is ignored because host names, paths, and optional development
+# signing settings belong to a specific build machine.
+
+WINDOWS_SSH_TARGET='builduser@windows-build.example.invalid'
+WINDOWS_SSH_PORT='22'
+WINDOWS_SSH_IDENTITY_FILE=''
+
+WINDOWS_REPOSITORY_DIR='C:\Users\builduser\source\FriedasBirdview'
+WINDOWS_QT_ROOT='C:\Qt\6.11.1\msvc2022_64'
+WINDOWS_VCPKG_ROOT='C:\src\vcpkg'
+WINDOWS_VSDEVCMD='C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat'
+
+# The release must already exist. The script only uploads verified assets.
+GITHUB_REPOSITORY='OWNER/FriedasBirdview'
+
+# Leave both empty for normal unsigned releases. A self-signed development
+# certificate is only appropriate for a VM that explicitly trusts its test
+# root; never use it for public releases.
+WINDOWS_SIGNING_CERT_THUMBPRINT=''
+WINDOWS_SIGNING_TIMESTAMP_URL=''
+
+# The project currently has no CTest tests. Keep this at 0 to fail closed.
+# Set it to 1 only for an explicitly accepted temporary exception.
+WINDOWS_ALLOW_NO_CTEST_TESTS='0'

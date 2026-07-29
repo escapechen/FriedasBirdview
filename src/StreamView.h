@@ -1,7 +1,9 @@
 #pragma once
 
 #include <QList>
+#include <QList>
 #include <QNetworkCookie>
+#include <QSslCertificate>
 #include <QSet>
 #include <QUrl>
 #include <QWidget>
@@ -33,7 +35,7 @@ class StreamView final : public QWidget {
     Q_OBJECT
 
 public:
-    explicit StreamView(QWidget *parent = nullptr);
+    explicit StreamView(const QList<QSslCertificate> &customCaCertificates, QWidget *parent = nullptr);
 
     void start(const QUrl &serverUrl, const QString &streamName, const QList<QNetworkCookie> &cookies);
     void stop();

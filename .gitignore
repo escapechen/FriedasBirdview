@@ -5,6 +5,10 @@ flatpak-build/
 flatpak-repo/
 .flatpak-builder/
 
+# Local Windows VM release handoff settings and downloaded release assets.
+build-and-install-windows.conf
+dist/
+
 # IDE state.
 .idea/
 .vscode/

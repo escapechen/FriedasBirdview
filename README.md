@@ -160,6 +160,7 @@ records and filters them by object classification.
 ## Project notes
 
 - [Build details](docs/BUILD_FROM_SOURCE.md)
+- [Release process and versioning](docs/RELEASING.md)
 - [Flatpak package](docs/FLATPAK.md)
 - [Gentoo ebuild and local-overlay instructions](docs/GENTOO.md)
 - [Changelog](CHANGELOG.md)

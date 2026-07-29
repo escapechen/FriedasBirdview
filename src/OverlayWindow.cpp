@@ -142,7 +142,7 @@ QString shortTime(const QDateTime &time)
 }
 }
 
-OverlayWindow::OverlayWindow(QWidget *parent)
+OverlayWindow::OverlayWindow(const QList<QSslCertificate> &customCaCertificates, QWidget *parent)
     : QWidget(parent)
     , m_snapshotTimer(new QTimer(this))
     , m_countdownTimer(new QTimer(this))
@@ -187,7 +187,7 @@ OverlayWindow::OverlayWindow(QWidget *parent)
     m_snapshotLabel->setMinimumHeight(180);
     m_snapshotLabel->setText(QStringLiteral("Loading JPEG snapshot…"));
     m_snapshotLabel->setStyleSheet(QStringLiteral("color: #d5dde5;"));
-    m_streamView = new StreamView(feedContainer);
+    m_streamView = new StreamView(customCaCertificates, feedContainer);
     m_feedStack->addWidget(m_snapshotLabel);
     m_feedStack->addWidget(m_streamView);
     layout->addWidget(feedContainer, 1);

@@ -14,6 +14,7 @@
 #include <QUrl>
 
 #include "CustomCaStore.h"
+#include "CredentialStore.h"
 
 class QNetworkAccessManager;
 class QNetworkCookieJar;
@@ -75,6 +76,7 @@ public:
     QUrl baseUrl() const;
     QList<QNetworkCookie> authenticationCookies() const;
     QList<CustomCaStore::Entry> customCaCertificates() const;
+    QList<QSslCertificate> customCaTrustAnchors() const;
 
     void setOverlayDurationSeconds(int seconds);
     void setFeedMode(FeedMode mode);
@@ -91,7 +93,7 @@ public:
     bool addCustomCaCertificate(const QString &filePath, QString *summary, QString *error);
     bool removeCustomCaCertificate(const QString &id, QString *error);
 
-    /// Validates and stores settings. A non-empty password is kept only in KWallet.
+    /// Validates and stores settings. A non-empty password is kept only in the OS credential store.
     bool applyConnectionSettings(const QString &address, const QString &username, const QString &password);
 
 public slots:
@@ -174,10 +176,11 @@ private:
     bool hasStoredPassword(const QString &username, QString *error) const;
     bool savePassword(const QString &username, const QString &password, QString *error) const;
     bool deletePassword(const QString &username, QString *error) const;
-    QString walletKey(const QString &username) const;
+    QString credentialKey(const QString &username) const;
 
     QNetworkAccessManager *m_network = nullptr;
     QNetworkCookieJar *m_cookieJar = nullptr;
+    CredentialStore m_credentials;
     CustomCaStore m_customCaStore;
     QSslConfiguration m_tlsConfiguration;
     QTimer m_pollTimer;
