@@ -6,6 +6,13 @@ versioning when releases are tagged.
 
 ## [Unreleased]
 
+## [1.3.0]
+
+### Fixed
+
+- The Windows release handoff now passes named parameters correctly to the
+  packaging script, allowing its tagged VM build to complete.
+
 ## [1.2.0]
 
 ### Added
@@ -96,3 +103,4 @@ versioning when releases are tagged.
 [1.0.1]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.0.1
 [1.1.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.1.0
 [1.2.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.2.0
+[1.3.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.3.0

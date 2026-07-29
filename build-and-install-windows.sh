@@ -190,20 +190,20 @@ $env:QT_ROOT = $QtRoot
 $buildDirectory = Join-Path $RepositoryDir 'build-win-package'
 $outputDirectory = Join-Path $RepositoryDir 'dist'
 $packageScript = Join-Path $RepositoryDir 'packaging\windows\package.ps1'
-$packageArguments = @(
-    '-QtRoot', $QtRoot,
-    '-VcpkgRoot', $VcpkgRoot,
-    '-BuildDirectory', $buildDirectory,
-    '-OutputDirectory', $outputDirectory
-)
+$packageParameters = @{
+    QtRoot = $QtRoot
+    VcpkgRoot = $VcpkgRoot
+    BuildDirectory = $buildDirectory
+    OutputDirectory = $outputDirectory
+}
 if (-not [string]::IsNullOrWhiteSpace($SigningCertificateThumbprint)) {
-    $packageArguments += @('-SigningCertificateThumbprint', $SigningCertificateThumbprint)
+    $packageParameters.SigningCertificateThumbprint = $SigningCertificateThumbprint
 }
 if (-not [string]::IsNullOrWhiteSpace($SigningTimestampUrl)) {
-    $packageArguments += @('-TimestampUrl', $SigningTimestampUrl)
+    $packageParameters.TimestampUrl = $SigningTimestampUrl
 }
 
-& $packageScript @packageArguments
+& $packageScript @packageParameters
 if (-not $?) {
     throw 'Windows packaging failed.'
 }

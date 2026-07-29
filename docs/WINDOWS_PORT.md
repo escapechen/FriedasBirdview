@@ -9,8 +9,8 @@ it contains no production connection details or credentials.
 - Linux/KDE and Flatpak are the current supported release targets.
 - The public `v1.0.1` release is a Linux Flatpak release.
 - Windows has a native CMake/MSVC build path. It is not packaged or released yet.
-- The CMake project currently reports version `1.2.0`; release it only as tag
-  `v1.2.0` after the Windows installer smoke test passes.
+- The CMake project currently reports version `1.3.0`; release it only as tag
+  `v1.3.0` after the Windows installer smoke test passes.
 
 ## What is already portable
 
