@@ -29,7 +29,8 @@ the project maintainer.
   object.
 - Shows the detected label, confidence, camera, and countdown.
 - Uses JPEG snapshots by default, with an authenticated low-latency go2rtc MSE
-  live-stream option.
+  live-stream option that automatically falls back to JPEG if playback is
+  unavailable, stalls, or repeatedly fails.
 - Can play an opt-in, user-selected sound for a newly detected matching event.
 - Offers independent, optional cooldowns for automatic popups and sound alerts.
 - Stores an optional Frigate password in KDE Wallet on Linux or Windows
@@ -145,8 +146,9 @@ tray state; it never terminates the app.
 For **Live stream**, the selected camera needs a working Frigate/go2rtc MSE
 restream and a codec Chromium can play. FriedasBirdview uses the Frigate
 configuration mapping `cameras.<camera>.live.streams`; a camera name is not
-assumed to be the go2rtc stream name. **JPEG snapshots** remain the compatible
-fallback if live playback is unavailable.
+assumed to be the go2rtc stream name. It keeps playback near the live edge and
+automatically switches to **JPEG snapshots** after incompatible, stalled, or
+repeatedly failed live playback.
 
 ## Important Frigate distinction
 
@@ -167,7 +169,7 @@ records and filters them by object classification.
 | The app does not start after sign-in | Confirm the **Startup** switch is enabled. Linux native installs use XDG autostart, Flatpak requires desktop Background portal approval, and Windows uses the current user’s startup entry. Re-enable after moving a native Linux executable. |
 | No sound is heard | Enable **Sound alerts**, use **Preview**, and check the desktop output device and volume. |
 | Private CA works for JPEG but not live video | Add the issuing CA in **Custom certificate authorities**, then fully restart FriedasBirdview. Native packages require the NSS `certutil` tool; the Flatpak includes it. |
-| Live stream is black or frozen | Confirm the stream plays in Frigate and a compatible go2rtc codec is available; choose JPEG snapshots as the immediate fallback. |
+| Live stream is black or frozen | Confirm the stream plays in Frigate and a compatible go2rtc codec is available. The app retries then switches to JPEG snapshots; choose JPEG directly if you prefer not to retry live playback. |
 | Feed is on the wrong screen | Drag it to the intended display once. On Wayland placement is ultimately controlled by KWin. |
 
 ## Project notes

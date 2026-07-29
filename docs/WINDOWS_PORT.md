@@ -9,15 +9,16 @@ contains no production connection details or credentials.
 - Linux/KDE is available as a native build and Flatpak bundle.
 - Windows 11 x64 is available as a native CMake/MSVC build and an Inno Setup
   installer with its runtime dependencies included.
-- The CMake project currently reports version `1.4.0`; release it as tag
-  `v1.4.0` after the Windows installer smoke test passes.
+- The CMake project currently reports version `1.5.0`; release it as tag
+  `v1.5.0` after the Windows installer smoke test passes.
 
 ## What is already portable
 
 The Qt Widgets UI, Frigate HTTP client, event filtering, JPEG feed, sound
-notifications, Qt Multimedia, and Qt WebEngine MSE player should be shared.
-Build the Windows application with the same CMake project rather than starting
-a separate application.
+notifications, Qt Multimedia, and Qt WebEngine MSE player are shared. Build
+the Windows application with the same CMake project rather than starting a
+separate application. Live MSE playback keeps a bounded near-live buffer and
+automatically falls back to JPEG snapshots when it cannot recover.
 
 ## Required free software on Windows 11
 

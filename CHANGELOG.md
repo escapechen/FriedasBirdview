@@ -6,6 +6,14 @@ versioning when releases are tagged.
 
 ## [Unreleased]
 
+## [1.5.0]
+
+### Fixed
+
+- Hardened live go2rtc MSE playback: keeps a bounded near-live buffer, retries
+  recoverable connection and media errors, and automatically switches to JPEG
+  snapshots when live playback is unavailable, stalls, or fails repeatedly.
+
 ## [1.4.0]
 
 ### Changed
@@ -113,3 +121,4 @@ versioning when releases are tagged.
 [1.2.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.2.0
 [1.3.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.3.0
 [1.4.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.4.0
+[1.5.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.5.0
