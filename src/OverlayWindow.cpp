@@ -248,6 +248,7 @@ OverlayWindow::OverlayWindow(const QList<QSslCertificate> &customCaCertificates,
     connect(m_streamView, &StreamView::streamConnected, this, [this] {
         m_errorLabel->hide();
     });
+    connect(m_streamView, &StreamView::jpegFallbackRequested, this, &OverlayWindow::activateJpegFallback);
     connect(m_streamView, &StreamView::aspectRatioChanged, this, &OverlayWindow::applyAspectRatio);
 }
 
@@ -262,12 +263,14 @@ void OverlayWindow::setMonitor(FrigateMonitor *monitor)
             return;
         }
         m_snapshot = snapshot;
-        m_errorLabel->hide();
+        if (!m_usingJpegFallback) {
+            m_errorLabel->hide();
+        }
         applyAspectRatio(static_cast<double>(snapshot.width()) / static_cast<double>(snapshot.height()));
         updateSnapshotPixmap();
     });
     connect(m_monitor, &FrigateMonitor::snapshotFailed, this, [this](const QString &message) {
-        if (m_monitor->feedMode() == FrigateMonitor::FeedMode::Jpeg && isVisible()) {
+        if ((m_monitor->feedMode() == FrigateMonitor::FeedMode::Jpeg || m_usingJpegFallback) && isVisible()) {
             m_errorLabel->setText(message);
             m_errorLabel->show();
         }
@@ -285,6 +288,7 @@ void OverlayWindow::setMonitor(FrigateMonitor *monitor)
     });
     connect(m_monitor, &FrigateMonitor::streamSessionChanged, this, [this] {
         if (isVisible() && m_monitor->feedMode() == FrigateMonitor::FeedMode::LiveStream) {
+            m_usingJpegFallback = false;
             configureFeed(true);
         }
     });
@@ -302,7 +306,8 @@ void OverlayWindow::present()
     }
     restoreSavedGeometry();
     updateActivity(m_monitor->activity());
-    configureFeed();
+    m_usingJpegFallback = false;
+    configureFeed(true);
     show();
     m_countdownTimer->start();
 }
@@ -401,9 +406,17 @@ void OverlayWindow::configureFeed(bool force)
     if (!m_monitor) {
         return;
     }
-    const FrigateMonitor::FeedMode mode = m_monitor->feedMode();
+    const FrigateMonitor::FeedMode requestedMode = m_monitor->feedMode();
     const QString camera = m_monitor->currentFeedCameraName();
     const QString stream = m_monitor->currentFeedStreamName();
+    if (requestedMode != m_requestedMode
+        || (m_usingJpegFallback && (camera != m_shownCamera || stream != m_shownStream))) {
+        m_usingJpegFallback = false;
+    }
+    m_requestedMode = requestedMode;
+    const FrigateMonitor::FeedMode mode = m_usingJpegFallback
+        ? FrigateMonitor::FeedMode::Jpeg
+        : requestedMode;
     if (!force && mode == m_shownMode && camera == m_shownCamera
         && (mode != FrigateMonitor::FeedMode::LiveStream || stream == m_shownStream)) {
         return;
@@ -424,6 +437,25 @@ void OverlayWindow::configureFeed(bool force)
         m_feedStack->setCurrentWidget(m_streamView);
         m_streamView->start(m_monitor->baseUrl(), stream, m_monitor->authenticationCookies());
     }
+}
+
+void OverlayWindow::activateJpegFallback(const QString &message)
+{
+    if (!m_monitor || !isVisible() || m_monitor->feedMode() != FrigateMonitor::FeedMode::LiveStream) {
+        return;
+    }
+
+    m_usingJpegFallback = true;
+    m_shownMode = FrigateMonitor::FeedMode::Jpeg;
+    m_shownCamera = m_monitor->currentFeedCameraName();
+    m_shownStream = m_monitor->currentFeedStreamName();
+    m_streamView->stop();
+    m_feedStack->setCurrentWidget(m_snapshotLabel);
+    m_snapshotLabel->setText(QStringLiteral("Loading JPEG snapshot…"));
+    m_snapshotTimer->start();
+    m_monitor->requestSnapshot();
+    m_errorLabel->setText(message);
+    m_errorLabel->show();
 }
 
 void OverlayWindow::updateSnapshotPixmap()

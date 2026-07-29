@@ -34,6 +34,7 @@ private:
     void saveGeometry();
     void updateActivity(const FrigateMonitor::Activity &activity);
     void configureFeed(bool force = false);
+    void activateJpegFallback(const QString &message);
     void updateSnapshotPixmap();
     void applyAspectRatio(double aspectRatio);
     void toggleZoom();
@@ -53,8 +54,10 @@ private:
     QString m_shownCamera;
     QString m_shownStream;
     FrigateMonitor::FeedMode m_shownMode = FrigateMonitor::FeedMode::Jpeg;
+    FrigateMonitor::FeedMode m_requestedMode = FrigateMonitor::FeedMode::Jpeg;
     double m_aspectRatio = 16.0 / 9.0;
     bool m_hasAppliedAspectRatio = false;
+    bool m_usingJpegFallback = false;
     int m_collapsedWidth = 480;
     bool m_expanded = false;
     bool m_geometryRestored = false;

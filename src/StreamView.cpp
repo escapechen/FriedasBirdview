@@ -77,6 +77,11 @@ void StreamBridge::connected()
     emit streamConnected();
 }
 
+void StreamBridge::fallbackToJpeg(const QString &message)
+{
+    emit fallbackRequested(message.left(300));
+}
+
 StreamView::StreamView(const QList<QSslCertificate> &customCaCertificates, QWidget *parent)
     : QWidget(parent)
     , m_view(new QWebEngineView(this))
@@ -130,6 +135,7 @@ StreamView::StreamView(const QList<QSslCertificate> &customCaCertificates, QWidg
     connect(m_bridge, &StreamBridge::aspectRatioReported, this, &StreamView::aspectRatioChanged);
     connect(m_bridge, &StreamBridge::dismissRequested, this, &StreamView::dismissRequested);
     connect(m_bridge, &StreamBridge::streamConnected, this, &StreamView::streamConnected);
+    connect(m_bridge, &StreamBridge::fallbackRequested, this, &StreamView::jpegFallbackRequested);
     connect(m_profile->cookieStore(), &QWebEngineCookieStore::cookieAdded, this, &StreamView::cookieAdded);
 }
 
@@ -213,37 +219,160 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
     const camera = %2;
     const video = document.getElementById("feed");
     const codecs = ["avc1.640029", "avc1.64002A", "avc1.640033", "hvc1.1.6.L153.B0", "mp4a.40.2", "mp4a.40.5", "flac", "opus"];
-    const reconnectDelay = 2000;
+    const maxBufferSeconds = 4;
+    const keepBufferSeconds = 2.5;
+    const maxPendingBytes = 2 * 1024 * 1024;
+    const maxRecoveryAttempts = 3;
+    const reconnectDelay = 1500;
     let bridge;
     let socket;
     let mediaSource;
-    let shouldReconnect = true;
+    let sourceBuffer;
+    let pending = [];
+    let pendingBytes = 0;
     let firstFrameTimer;
+    let restartTimer;
+    let stablePlaybackTimer;
+    let shouldReconnect = true;
+    let isRecovering = false;
+    let recoveryAttempts = 0;
+    let lastPlaybackTime = -1;
+    let lastPlaybackAdvanceAt = Date.now();
 
     function report(message) { if (bridge) bridge.reportError(message); }
+    function fallback(message) {
+      shouldReconnect = false;
+      clearTimeout(firstFrameTimer);
+      clearTimeout(restartTimer);
+      clearTimeout(stablePlaybackTimer);
+      closeSocket();
+      resetMediaSource();
+      if (bridge) bridge.fallbackToJpeg(message);
+    }
     function reportAspectRatio() {
       if (video.videoWidth > 0 && video.videoHeight > 0 && bridge) {
         bridge.reportAspectRatio(video.videoWidth / video.videoHeight);
       }
     }
-    function closeSocket() { if (socket) { socket.onclose = null; socket.close(); socket = null; } }
+    function closeSocket() {
+      if (!socket) return;
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      socket.close();
+      socket = null;
+    }
+    function resetMediaSource() {
+      sourceBuffer = null;
+      mediaSource = null;
+      pending = [];
+      pendingBytes = 0;
+      if (video.src) URL.revokeObjectURL(video.src);
+      video.removeAttribute("src");
+      video.srcObject = null;
+      video.load();
+    }
+    function recover(reason) {
+      if (!shouldReconnect || isRecovering) return;
+      isRecovering = true;
+      clearTimeout(firstFrameTimer);
+      clearTimeout(stablePlaybackTimer);
+      recoveryAttempts += 1;
+      if (recoveryAttempts >= maxRecoveryAttempts) {
+        fallback("Live stream failed repeatedly. Showing JPEG snapshots.");
+        return;
+      }
+      report(`${reason} Retrying… (${recoveryAttempts}/${maxRecoveryAttempts - 1})`);
+      closeSocket();
+      resetMediaSource();
+      clearTimeout(restartTimer);
+      restartTimer = setTimeout(() => {
+        isRecovering = false;
+        start();
+      }, reconnectDelay);
+    }
+    function trimBuffer() {
+      if (!sourceBuffer || sourceBuffer.updating || !sourceBuffer.buffered.length) return false;
+      const ranges = sourceBuffer.buffered;
+      const start = ranges.start(0);
+      const end = ranges.end(ranges.length - 1);
+      if (end - start <= maxBufferSeconds) return false;
+      const removeEnd = Math.max(start, end - keepBufferSeconds);
+      if (removeEnd <= start + 0.05) return false;
+      sourceBuffer.remove(start, removeEnd);
+      return true;
+    }
+    function recoverBufferError(error) {
+      const name = error?.name || "UnknownError";
+      if (name === "QuotaExceededError") {
+        recover("Live stream buffer is full.");
+      } else if (name === "InvalidStateError") {
+        recover("Live stream buffer entered an invalid state.");
+      } else {
+        recover(`Live stream buffer error: ${name}.`);
+      }
+    }
+    function pump() {
+      if (!sourceBuffer || sourceBuffer.updating || isRecovering) return;
+      try {
+        if (trimBuffer()) return;
+        if (!pending.length) return;
+        const segment = pending.shift();
+        pendingBytes -= segment.byteLength;
+        sourceBuffer.appendBuffer(segment);
+      } catch (error) {
+        recoverBufferError(error);
+      }
+    }
+    function appendSegment(segment) {
+      if (!sourceBuffer || isRecovering) return;
+      pending.push(segment);
+      pendingBytes += segment.byteLength;
+      if (pendingBytes > maxPendingBytes) {
+        recover("Live stream buffer could not keep up.");
+        return;
+      }
+      pump();
+    }
+    function keepNearLiveEdge() {
+      if (!sourceBuffer?.buffered.length || !Number.isFinite(video.currentTime)) return;
+      const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
+      if (end - video.currentTime > maxBufferSeconds) {
+        video.currentTime = Math.max(0, end - 0.5);
+      }
+    }
     function start() {
+      if (!shouldReconnect) return;
       const MediaSourceConstructor = window.ManagedMediaSource || window.MediaSource;
-      if (!MediaSourceConstructor) { report("This system cannot play Frigate's MSE stream."); return; }
+      if (!MediaSourceConstructor) { fallback("This system cannot play Frigate's MSE stream. Showing JPEG snapshots."); return; }
       const supported = codecs.filter((codec) =>
         MediaSourceConstructor.isTypeSupported(`video/mp4; codecs="${codec}"`)
       ).join();
-      if (!supported) { report("No compatible Frigate video codec is available."); return; }
+      if (!supported) { fallback("No compatible Frigate video codec is available. Showing JPEG snapshots."); return; }
 
       const streamURL = new URL("/live/mse/api/ws", server);
       streamURL.protocol = streamURL.protocol === "https:" ? "wss:" : "ws:";
       streamURL.searchParams.set("src", camera);
-      try { socket = new WebSocket(streamURL.href); }
-      catch (error) { report("Live stream connection failed."); return; }
-      socket.binaryType = "arraybuffer";
-      socket.onopen = () => {
+      let currentSocket;
+      try {
+        currentSocket = new WebSocket(streamURL.href);
+        socket = currentSocket;
+      } catch (error) {
+        recover(`Live stream connection failed: ${error.message || error}`);
+        return;
+      }
+      currentSocket.binaryType = "arraybuffer";
+      currentSocket.onopen = () => {
+        if (socket !== currentSocket || !shouldReconnect) return;
         mediaSource = new MediaSourceConstructor();
-        mediaSource.addEventListener("sourceopen", () => socket.send(JSON.stringify({type:"mse", value:supported})), {once:true});
+        mediaSource.addEventListener("sourceopen", () => {
+          try {
+            currentSocket.send(JSON.stringify({type:"mse", value:supported}));
+          } catch (error) {
+            recover(`Live stream setup failed: ${error.message || error}`);
+          }
+        }, {once:true});
         if ("ManagedMediaSource" in window) {
           video.disableRemotePlayback = true;
           video.srcObject = mediaSource;
@@ -252,55 +381,71 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
           video.src = URL.createObjectURL(mediaSource);
           video.srcObject = null;
         }
-        video.play().catch(() => report("Live stream could not start."));
+        video.play().catch((error) => recover(`Live stream could not start: ${error.message || error}`));
         clearTimeout(firstFrameTimer);
-        firstFrameTimer = setTimeout(() => report("Frigate did not send playable video."), 6000);
+        firstFrameTimer = setTimeout(() => recover("Frigate connected but did not send playable video."), 6000);
       };
-      socket.onmessage = (event) => {
-        if (typeof event.data !== "string") return;
+      currentSocket.onmessage = (event) => {
+        if (socket !== currentSocket || isRecovering || typeof event.data !== "string") return;
         let response;
         try { response = JSON.parse(event.data); }
-        catch (_) { report("Frigate returned an invalid live-stream response."); return; }
-        if (response.type !== "mse" || !mediaSource) return;
+        catch (_) { recover("Frigate returned an invalid live-stream response."); return; }
+        if (response.type !== "mse") return;
         try {
-          const sourceBuffer = mediaSource.addSourceBuffer(response.value);
+          if (!mediaSource || sourceBuffer) return;
+          sourceBuffer = mediaSource.addSourceBuffer(response.value);
           if (sourceBuffer.mode) sourceBuffer.mode = "segments";
-          const pending = [];
-          const pump = () => {
-            if (!sourceBuffer.updating && pending.length) {
-              sourceBuffer.appendBuffer(pending.shift());
-            } else if (!sourceBuffer.updating && sourceBuffer.buffered.length) {
-              const start = sourceBuffer.buffered.start(0);
-              const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1) - 15;
-              if (end > start) sourceBuffer.remove(start, end);
-            }
+          sourceBuffer.addEventListener("updateend", () => {
+            keepNearLiveEdge();
+            pump();
+          });
+          currentSocket.onmessage = (binaryEvent) => {
+            if (socket !== currentSocket || isRecovering || typeof binaryEvent.data === "string") return;
+            appendSegment(binaryEvent.data);
           };
-          sourceBuffer.addEventListener("updateend", pump);
-          socket.onmessage = (binaryEvent) => {
-            if (typeof binaryEvent.data === "string") return;
-            if (sourceBuffer.updating || pending.length) {
-              pending.push(binaryEvent.data);
-              if (pending.length > 24) { report("Live stream buffer could not keep up. Retrying…"); closeSocket(); }
-            } else {
-              try { sourceBuffer.appendBuffer(binaryEvent.data); }
-              catch (_) { /* A following segment retries after the browser recovers. */ }
-            }
-          };
-        } catch (_) { report("Frigate returned a video codec this system cannot play."); }
+        } catch (error) {
+          recover(`Frigate returned a video codec this system cannot play: ${error.name || error}`);
+        }
       };
-      socket.onerror = () => report("Live stream connection failed.");
-      socket.onclose = () => {
-        clearTimeout(firstFrameTimer);
-        if (shouldReconnect) { report("Live stream disconnected. Retrying…"); setTimeout(start, reconnectDelay); }
-      };
+      currentSocket.onerror = () => recover("Live stream connection failed.");
+      currentSocket.onclose = () => recover("Live stream disconnected.");
     }
     video.addEventListener("click", () => bridge && bridge.dismiss());
-    video.addEventListener("loadeddata", () => { clearTimeout(firstFrameTimer); if (bridge) bridge.connected(); });
+    video.addEventListener("loadeddata", () => {
+      clearTimeout(firstFrameTimer);
+      if (bridge) bridge.connected();
+      reportAspectRatio();
+      lastPlaybackTime = video.currentTime;
+      lastPlaybackAdvanceAt = Date.now();
+      clearTimeout(stablePlaybackTimer);
+      stablePlaybackTimer = setTimeout(() => {
+        if (Date.now() - lastPlaybackAdvanceAt < 5000) recoveryAttempts = 0;
+      }, 10000);
+    });
     video.addEventListener("loadedmetadata", reportAspectRatio);
     video.addEventListener("pause", () => { if (socket?.readyState === WebSocket.OPEN && !video.ended) video.play().catch(() => {}); });
+    video.addEventListener("timeupdate", () => {
+      if (video.currentTime > lastPlaybackTime + 0.05) {
+        lastPlaybackTime = video.currentTime;
+        lastPlaybackAdvanceAt = Date.now();
+      }
+      keepNearLiveEdge();
+    });
+    setInterval(() => {
+      if (!shouldReconnect || !socket || socket.readyState !== WebSocket.OPEN || isRecovering) return;
+      if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && Date.now() - lastPlaybackAdvanceAt > 5000) {
+        recover("Live stream stalled.");
+      }
+    }, 2000);
     window.addEventListener("error", (event) => report(`Live stream error: ${event.message || "unknown JavaScript error"}`));
     window.addEventListener("unhandledrejection", (event) => report(`Live stream error: ${event.reason?.message || event.reason || "unknown error"}`));
-    window.addEventListener("pagehide", () => { shouldReconnect = false; clearTimeout(firstFrameTimer); closeSocket(); });
+    window.addEventListener("pagehide", () => {
+      shouldReconnect = false;
+      clearTimeout(firstFrameTimer);
+      clearTimeout(restartTimer);
+      clearTimeout(stablePlaybackTimer);
+      closeSocket();
+    });
     new QWebChannel(qt.webChannelTransport, (channel) => { bridge = channel.objects.streamBridge; start(); });
   </script>
 </body>

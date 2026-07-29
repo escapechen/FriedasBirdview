@@ -23,12 +23,14 @@ public:
     Q_INVOKABLE void reportAspectRatio(double aspectRatio);
     Q_INVOKABLE void dismiss();
     Q_INVOKABLE void connected();
+    Q_INVOKABLE void fallbackToJpeg(const QString &message);
 
 signals:
     void errorReported(const QString &message);
     void aspectRatioReported(double aspectRatio);
     void dismissRequested();
     void streamConnected();
+    void fallbackRequested(const QString &message);
 };
 
 class StreamView final : public QWidget {
@@ -45,6 +47,7 @@ signals:
     void aspectRatioChanged(double aspectRatio);
     void dismissRequested();
     void streamConnected();
+    void jpegFallbackRequested(const QString &message);
 
 private:
     QString streamHtml(const QUrl &serverUrl, const QString &streamName) const;
