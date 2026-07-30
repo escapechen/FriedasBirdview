@@ -1,5 +1,7 @@
 #include "FrigateMonitor.h"
 
+#include "MqttClient.h"
+
 #include <QAudioDevice>
 #include <QAudioFormat>
 #include <QAudioSink>
@@ -28,6 +30,8 @@
 namespace {
 constexpr auto kDefaultServerAddress = "https://frigate.invalid";
 constexpr int kMaximumSeenActivityIds = 512;
+constexpr int kStandardPollIntervalMs = 2000;
+constexpr int kFastPollIntervalMs = 1000;
 
 QString trim(const QString &value)
 {
@@ -125,6 +129,8 @@ QByteArray alertSoundSamples(FrigateMonitor::AlertSound sound, const QAudioForma
 FrigateMonitor::FrigateMonitor(QObject *parent)
     : QObject(parent)
     , m_network(new QNetworkAccessManager(this))
+    , m_mqttClient(new MqttClient(this))
+    , m_mqttVerifier(new MqttClient(this))
 {
     qRegisterMetaType<FrigateMonitor::Activity>();
 
@@ -148,6 +154,26 @@ FrigateMonitor::FrigateMonitor(QObject *parent)
     m_username = settings.value("connection/username").toString().trimmed();
     m_overlayDurationSeconds = qBound(5, settings.value("feed/durationSeconds", 20).toInt(), 120);
     m_feedMode = settings.value("feed/mode", "jpeg").toString() == "live" ? FeedMode::LiveStream : FeedMode::Jpeg;
+    const QString livePlayback = settings.value("feed/livePlayback", "native-mse").toString();
+    m_livePlaybackMethod = livePlayback == "progressive-mp4" ? LivePlaybackMethod::ProgressiveMp4
+        : livePlayback == "browser-mse" ? LivePlaybackMethod::BrowserMse
+        : LivePlaybackMethod::NativeMse;
+    m_liveStartupTimeoutSeconds = qBound(
+        1, settings.value("feed/liveStartupTimeoutSeconds", 5).toInt(), 15
+    );
+    m_liveDebugEnabled = settings.value("feed/liveDebugEnabled", false).toBool();
+    m_fastEventPollingEnabled = settings.value("monitor/fastEventPolling", false).toBool();
+    m_eventDeliveryMode = settings.value("delivery/mode", "http").toString() == "mqtt"
+        ? EventDeliveryMode::Mqtt
+        : EventDeliveryMode::HttpPolling;
+    m_mqttBrokerHost = settings.value("delivery/mqttHost").toString().trimmed();
+    m_mqttBrokerPort = qBound(1, settings.value("delivery/mqttPort", 8883).toInt(), 65535);
+    m_mqttUseTls = settings.value("delivery/mqttUseTls", true).toBool();
+    m_mqttUsername = settings.value("delivery/mqttUsername").toString().trimmed();
+    m_mqttTopicPrefix = settings.value("delivery/mqttTopicPrefix", "frigate").toString().trimmed();
+    if (m_mqttTopicPrefix.isEmpty()) {
+        m_mqttTopicPrefix = QStringLiteral("frigate");
+    }
     m_popupTrigger = settings.value("popup/trigger", "selected").toString() == "any"
         ? PopupTrigger::AnyObject
         : PopupTrigger::SelectedClassifications;
@@ -174,11 +200,36 @@ FrigateMonitor::FrigateMonitor(QObject *parent)
     }
     m_availableClassifications = selectedClassifications();
 
-    m_pollTimer.setInterval(2000);
+    m_pollTimer.setInterval(m_fastEventPollingEnabled ? kFastPollIntervalMs : kStandardPollIntervalMs);
     connect(&m_pollTimer, &QTimer::timeout, this, &FrigateMonitor::pollActivity);
 
     m_overlayTimer.setSingleShot(true);
     connect(&m_overlayTimer, &QTimer::timeout, this, &FrigateMonitor::dismissFeed);
+
+    connect(m_mqttClient, &MqttClient::connectionStateChanged, this, [this](bool connected, const QString &detail) {
+        if (m_monitoring && m_eventDeliveryMode == EventDeliveryMode::Mqtt) {
+            setConnectionState(connected ? ConnectionState::Connected : ConnectionState::Failed, detail);
+        }
+        emit settingsChanged();
+    });
+    connect(m_mqttClient, &MqttClient::messageReceived, this, &FrigateMonitor::handleMqttMessage);
+
+    m_mqttVerificationTimer.setSingleShot(true);
+    connect(&m_mqttVerificationTimer, &QTimer::timeout, this, [this] {
+        completeMqttVerification(QStringLiteral("MQTT verification timed out before the broker confirmed both subscriptions."));
+    });
+    connect(m_mqttVerifier, &MqttClient::connectionStateChanged, this, [this](bool connected, const QString &) {
+        if (m_mqttVerificationInProgress && connected) {
+            completeMqttVerification(QStringLiteral(
+                "MQTT verification succeeded: the broker accepted the connection and both Frigate topic subscriptions."
+            ));
+        }
+    });
+    connect(m_mqttVerifier, &MqttClient::connectionFailed, this, [this](const QString &detail) {
+        if (m_mqttVerificationInProgress) {
+            completeMqttVerification(QStringLiteral("MQTT verification failed: %1").arg(detail));
+        }
+    });
 }
 
 QString FrigateMonitor::serverAddress() const
@@ -199,6 +250,79 @@ int FrigateMonitor::overlayDurationSeconds() const
 FrigateMonitor::FeedMode FrigateMonitor::feedMode() const
 {
     return m_feedMode;
+}
+
+LivePlaybackMethod FrigateMonitor::livePlaybackMethod() const
+{
+    return m_livePlaybackMethod;
+}
+
+int FrigateMonitor::liveStartupTimeoutSeconds() const
+{
+    return m_liveStartupTimeoutSeconds;
+}
+
+bool FrigateMonitor::isLiveDebugEnabled() const
+{
+    return m_liveDebugEnabled;
+}
+
+bool FrigateMonitor::isFastEventPollingEnabled() const
+{
+    return m_fastEventPollingEnabled;
+}
+
+FrigateMonitor::EventDeliveryMode FrigateMonitor::eventDeliveryMode() const
+{
+    return m_eventDeliveryMode;
+}
+
+QString FrigateMonitor::mqttBrokerHost() const
+{
+    return m_mqttBrokerHost;
+}
+
+int FrigateMonitor::mqttBrokerPort() const
+{
+    return m_mqttBrokerPort;
+}
+
+bool FrigateMonitor::mqttUsesTls() const
+{
+    return m_mqttUseTls;
+}
+
+QString FrigateMonitor::mqttUsername() const
+{
+    return m_mqttUsername;
+}
+
+QString FrigateMonitor::mqttTopicPrefix() const
+{
+    return m_mqttTopicPrefix;
+}
+
+QString FrigateMonitor::eventDeliveryStatus() const
+{
+    if (m_eventDeliveryMode == EventDeliveryMode::HttpPolling) {
+        return m_fastEventPollingEnabled
+            ? QStringLiteral("HTTP polling every second")
+            : QStringLiteral("HTTP polling every two seconds");
+    }
+    if (m_connectionState == ConnectionState::Failed && !m_connectionDetail.isEmpty()) {
+        return m_connectionDetail;
+    }
+    return m_mqttClient->statusText();
+}
+
+bool FrigateMonitor::isMqttVerificationInProgress() const
+{
+    return m_mqttVerificationInProgress;
+}
+
+QString FrigateMonitor::mqttVerificationStatus() const
+{
+    return m_mqttVerificationStatus;
 }
 
 FrigateMonitor::PopupTrigger FrigateMonitor::popupTrigger() const
@@ -352,6 +476,7 @@ bool FrigateMonitor::addCustomCaCertificate(const QString &filePath, QString *su
         return false;
     }
     updateTlsConfiguration();
+    m_mqttClient->setTlsConfiguration(m_tlsConfiguration);
     emit customCaCertificatesChanged();
     emit settingsChanged();
     return true;
@@ -363,6 +488,7 @@ bool FrigateMonitor::removeCustomCaCertificate(const QString &id, QString *error
         return false;
     }
     updateTlsConfiguration();
+    m_mqttClient->setTlsConfiguration(m_tlsConfiguration);
     emit customCaCertificatesChanged();
     emit settingsChanged();
     return true;
@@ -393,6 +519,80 @@ void FrigateMonitor::setFeedMode(FeedMode mode)
     QSettings().setValue("feed/mode", mode == FeedMode::LiveStream ? "live" : "jpeg");
     emit settingsChanged();
     emit streamSessionChanged();
+}
+
+void FrigateMonitor::setLivePlaybackMethod(LivePlaybackMethod method)
+{
+    if (m_livePlaybackMethod == method) {
+        return;
+    }
+    m_livePlaybackMethod = method;
+    QString value = QStringLiteral("native-mse");
+    if (method == LivePlaybackMethod::ProgressiveMp4) {
+        value = QStringLiteral("progressive-mp4");
+    } else if (method == LivePlaybackMethod::BrowserMse) {
+        value = QStringLiteral("browser-mse");
+    }
+    QSettings().setValue("feed/livePlayback", value);
+    emit settingsChanged();
+    emit streamSessionChanged();
+}
+
+void FrigateMonitor::setLiveStartupTimeoutSeconds(int seconds)
+{
+    const int bounded = qBound(1, seconds, 15);
+    if (m_liveStartupTimeoutSeconds == bounded) {
+        return;
+    }
+    m_liveStartupTimeoutSeconds = bounded;
+    QSettings().setValue("feed/liveStartupTimeoutSeconds", bounded);
+    emit settingsChanged();
+    emit streamSessionChanged();
+}
+
+void FrigateMonitor::setLiveDebugEnabled(bool enabled)
+{
+    if (m_liveDebugEnabled == enabled) {
+        return;
+    }
+    m_liveDebugEnabled = enabled;
+    QSettings().setValue("feed/liveDebugEnabled", enabled);
+    emit settingsChanged();
+    emit streamSessionChanged();
+}
+
+void FrigateMonitor::setFastEventPollingEnabled(bool enabled)
+{
+    if (m_fastEventPollingEnabled == enabled) {
+        return;
+    }
+    m_fastEventPollingEnabled = enabled;
+    m_pollTimer.setInterval(enabled ? kFastPollIntervalMs : kStandardPollIntervalMs);
+    QSettings().setValue("monitor/fastEventPolling", enabled);
+    emit settingsChanged();
+}
+
+void FrigateMonitor::setEventDeliveryMode(EventDeliveryMode mode)
+{
+    if (m_eventDeliveryMode == mode) {
+        return;
+    }
+    m_eventDeliveryMode = mode;
+    QSettings().setValue("delivery/mode", mode == EventDeliveryMode::Mqtt ? "mqtt" : "http");
+    if (m_monitoring) {
+        if (mode == EventDeliveryMode::Mqtt) {
+            m_pollTimer.stop();
+            startMqttDelivery();
+            // Keep the normal HTTP requests for a one-time initial state sync,
+            // but do not keep polling while MQTT is delivering new activity.
+            pollActivity();
+        } else {
+            stopMqttDelivery();
+            m_pollTimer.start();
+            pollActivity();
+        }
+    }
+    emit settingsChanged();
 }
 
 void FrigateMonitor::setPopupTrigger(PopupTrigger trigger)
@@ -705,6 +905,41 @@ bool FrigateMonitor::applyConnectionSettings(const QString &address, const QStri
     return true;
 }
 
+bool FrigateMonitor::applyMqttSettings(const QString &host, int port, bool useTls, const QString &username,
+    const QString &password, const QString &topicPrefix)
+{
+    QString normalizedHost;
+    QString normalizedTopicPrefix;
+    QString error;
+    if (!validateMqttSettings(host, port, topicPrefix, &normalizedHost, &normalizedTopicPrefix, &error)) {
+        setConnectionState(ConnectionState::Failed, error);
+        return false;
+    }
+    if (!updateMqttCredentials(normalizedHost, username, password, &error)) {
+        setConnectionState(ConnectionState::Failed, error);
+        return false;
+    }
+
+    m_mqttBrokerHost = normalizedHost;
+    m_mqttBrokerPort = port;
+    m_mqttUseTls = useTls;
+    m_mqttTopicPrefix = normalizedTopicPrefix;
+    QSettings settings;
+    settings.setValue("delivery/mqttHost", m_mqttBrokerHost);
+    settings.setValue("delivery/mqttPort", m_mqttBrokerPort);
+    settings.setValue("delivery/mqttUseTls", m_mqttUseTls);
+    settings.setValue("delivery/mqttUsername", m_mqttUsername);
+    settings.setValue("delivery/mqttTopicPrefix", m_mqttTopicPrefix);
+    m_mqttVerificationStatus.clear();
+
+    if (m_monitoring && m_eventDeliveryMode == EventDeliveryMode::Mqtt) {
+        stopMqttDelivery();
+        startMqttDelivery();
+    }
+    emit settingsChanged();
+    return true;
+}
+
 void FrigateMonitor::start()
 {
     if (m_monitoring) {
@@ -712,9 +947,13 @@ void FrigateMonitor::start()
     }
     m_monitoring = true;
     m_pollInFlight = false;
-    m_pollTimer.start();
     setConnectionState(ConnectionState::Connecting);
     emit monitoringChanged(true);
+    if (m_eventDeliveryMode == EventDeliveryMode::HttpPolling) {
+        m_pollTimer.start();
+    } else {
+        startMqttDelivery();
+    }
     pollActivity();
 }
 
@@ -726,6 +965,7 @@ void FrigateMonitor::stop()
     m_monitoring = false;
     m_pollInFlight = false;
     m_pollTimer.stop();
+    stopMqttDelivery();
     setConnectionState(ConnectionState::Idle);
     emit monitoringChanged(false);
 }
@@ -907,10 +1147,121 @@ void FrigateMonitor::finishPollIfComplete()
         return;
     }
     m_pollInFlight = false;
+    if (m_eventDeliveryMode == EventDeliveryMode::Mqtt) {
+        // MQTT owns ongoing delivery state. This HTTP request is only the
+        // initial activity and stream-name sync needed after startup/switching.
+        return;
+    }
     if (m_pollResult.error.isEmpty()) {
         setConnectionState(ConnectionState::Connected);
     } else {
         setConnectionState(ConnectionState::Failed, m_pollResult.error);
+    }
+}
+
+void FrigateMonitor::startMqttDelivery()
+{
+    MqttClient::Configuration configuration;
+    QString error;
+    if (!mqttConfiguration(&configuration, &error)) {
+        setConnectionState(ConnectionState::Failed, error);
+        return;
+    }
+    m_mqttClient->setTlsConfiguration(m_tlsConfiguration);
+    m_mqttClient->setConfiguration(configuration);
+    m_mqttClient->start();
+}
+
+void FrigateMonitor::stopMqttDelivery()
+{
+    m_mqttClient->stop();
+}
+
+bool FrigateMonitor::mqttConfiguration(MqttClient::Configuration *configuration, QString *error) const
+{
+    QString normalizedHost;
+    QString normalizedTopicPrefix;
+    if (!validateMqttSettings(m_mqttBrokerHost, m_mqttBrokerPort, m_mqttTopicPrefix,
+            &normalizedHost, &normalizedTopicPrefix, error)) {
+        return false;
+    }
+    configuration->host = normalizedHost;
+    configuration->port = static_cast<quint16>(m_mqttBrokerPort);
+    configuration->username = m_mqttUsername;
+    configuration->topicPrefix = normalizedTopicPrefix;
+    configuration->useTls = m_mqttUseTls;
+    if (!m_mqttUsername.isEmpty() && !loadMqttPassword(&configuration->password, error)) {
+        return false;
+    }
+    return true;
+}
+
+void FrigateMonitor::verifyMqttConnection()
+{
+    if (m_mqttVerificationInProgress) {
+        return;
+    }
+    MqttClient::Configuration configuration;
+    QString error;
+    if (!mqttConfiguration(&configuration, &error)) {
+        m_mqttVerificationStatus = QStringLiteral("MQTT verification failed: %1").arg(error);
+        emit settingsChanged();
+        return;
+    }
+
+    m_mqttVerificationInProgress = true;
+    m_mqttVerificationStatus = QStringLiteral("Verifying the MQTT connection and Frigate topic subscriptions…");
+    m_mqttVerifier->setTlsConfiguration(m_tlsConfiguration);
+    m_mqttVerifier->setConfiguration(configuration);
+    m_mqttVerifier->start();
+    m_mqttVerificationTimer.start(20000);
+    emit settingsChanged();
+}
+
+void FrigateMonitor::completeMqttVerification(const QString &status)
+{
+    if (!m_mqttVerificationInProgress) {
+        return;
+    }
+    m_mqttVerificationInProgress = false;
+    m_mqttVerificationTimer.stop();
+    m_mqttVerifier->stop();
+    m_mqttVerificationStatus = status;
+    emit settingsChanged();
+}
+
+void FrigateMonitor::handleMqttMessage(const QString &topic, const QByteArray &payload)
+{
+    const QString topicPrefix = m_mqttTopicPrefix + QLatin1Char('/');
+    const QString eventsTopic = topicPrefix + QStringLiteral("events");
+    const QString reviewsTopic = topicPrefix + QStringLiteral("reviews");
+    if (topic != eventsTopic && topic != reviewsTopic) {
+        return;
+    }
+
+    const QJsonDocument document = QJsonDocument::fromJson(payload);
+    if (!document.isObject()) {
+        return;
+    }
+    const QJsonObject envelope = document.object();
+    const QString updateType = envelope.value(QStringLiteral("type")).toString();
+    if (!updateType.isEmpty() && updateType != QStringLiteral("new") && updateType != QStringLiteral("update")) {
+        return;
+    }
+    const QJsonObject activity = envelope.value(QStringLiteral("after")).isObject()
+        ? envelope.value(QStringLiteral("after")).toObject()
+        : envelope;
+    if (topic == eventsTopic) {
+        const Event event = parseEventObject(activity);
+        if (!event.id.isEmpty() && !event.camera.isEmpty() && !event.label.isEmpty() && event.startTime > 0) {
+            handleEvents({event});
+        }
+        return;
+    }
+
+    const ReviewItem item = parseReviewItemObject(activity);
+    if (!item.id.isEmpty() && !item.camera.isEmpty() && item.startTime > 0) {
+        handleReviewItems({item});
     }
 }
 
@@ -1231,15 +1582,7 @@ QList<FrigateMonitor::Event> FrigateMonitor::parseEvents(const QByteArray &data,
     }
     QList<Event> events;
     for (const auto &value : document.array()) {
-        const QJsonObject object = value.toObject();
-        Event event{
-            object.value(QStringLiteral("id")).toString(),
-            object.value(QStringLiteral("camera")).toString(),
-            object.value(QStringLiteral("label")).toString(),
-            object.value(QStringLiteral("sub_label")).toString(),
-            jsonTimestamp(object, QStringLiteral("start_time")),
-            object.value(QStringLiteral("top_score")).isDouble() ? object.value(QStringLiteral("top_score")).toDouble() : -1,
-        };
+        const Event event = parseEventObject(value.toObject());
         if (!event.id.isEmpty() && !event.camera.isEmpty() && !event.label.isEmpty() && event.startTime > 0) {
             events.append(event);
         }
@@ -1257,21 +1600,37 @@ QList<FrigateMonitor::ReviewItem> FrigateMonitor::parseReviewItems(const QByteAr
     }
     QList<ReviewItem> items;
     for (const auto &value : document.array()) {
-        const QJsonObject object = value.toObject();
-        const QJsonObject reviewData = object.value(QStringLiteral("data")).toObject();
-        ReviewItem item{
-            object.value(QStringLiteral("id")).toString(),
-            object.value(QStringLiteral("camera")).toString(),
-            parseStringList(reviewData.value(QStringLiteral("objects"))) + parseStringList(reviewData.value(QStringLiteral("sub_labels"))),
-            jsonTimestamp(object, QStringLiteral("start_time")),
-            jsonTimestamp(object, QStringLiteral("end_time")),
-        };
+        const ReviewItem item = parseReviewItemObject(value.toObject());
         if (!item.id.isEmpty() && !item.camera.isEmpty() && item.startTime > 0) {
             items.append(item);
         }
     }
     *ok = true;
     return items;
+}
+
+FrigateMonitor::Event FrigateMonitor::parseEventObject(const QJsonObject &object) const
+{
+    return {
+        object.value(QStringLiteral("id")).toString(),
+        object.value(QStringLiteral("camera")).toString(),
+        object.value(QStringLiteral("label")).toString(),
+        object.value(QStringLiteral("sub_label")).toString(),
+        jsonTimestamp(object, QStringLiteral("start_time")),
+        object.value(QStringLiteral("top_score")).isDouble() ? object.value(QStringLiteral("top_score")).toDouble() : -1,
+    };
+}
+
+FrigateMonitor::ReviewItem FrigateMonitor::parseReviewItemObject(const QJsonObject &object) const
+{
+    const QJsonObject reviewData = object.value(QStringLiteral("data")).toObject();
+    return {
+        object.value(QStringLiteral("id")).toString(),
+        object.value(QStringLiteral("camera")).toString(),
+        parseStringList(reviewData.value(QStringLiteral("objects"))) + parseStringList(reviewData.value(QStringLiteral("sub_labels"))),
+        jsonTimestamp(object, QStringLiteral("start_time")),
+        jsonTimestamp(object, QStringLiteral("end_time")),
+    };
 }
 
 QStringList FrigateMonitor::parseStringList(const QJsonValue &value) const
@@ -1357,6 +1716,49 @@ bool FrigateMonitor::validateServerAddress(const QString &address, QUrl *url, QS
     return true;
 }
 
+bool FrigateMonitor::validateMqttSettings(const QString &host, int port, const QString &topicPrefix,
+    QString *normalizedHost, QString *normalizedTopicPrefix, QString *error) const
+{
+    const QString candidateHost = host.trimmed();
+    if (candidateHost.isEmpty()) {
+        *error = QStringLiteral("Enter an MQTT broker host.");
+        return false;
+    }
+    if (candidateHost.contains(QStringLiteral("://"))) {
+        *error = QStringLiteral("Enter only the MQTT broker host, without a scheme or port.");
+        return false;
+    }
+    const QUrl parsed(QStringLiteral("mqtt://") + candidateHost, QUrl::StrictMode);
+    if (!parsed.isValid() || parsed.host().isEmpty() || !parsed.userInfo().isEmpty()
+        || !parsed.path().isEmpty() || !parsed.query().isEmpty() || !parsed.fragment().isEmpty()
+        || parsed.port(-1) != -1) {
+        *error = QStringLiteral("Enter an MQTT host or IP address without a port, path, or credentials.");
+        return false;
+    }
+    if (port < 1 || port > 65535) {
+        *error = QStringLiteral("Use an MQTT port from 1 to 65535.");
+        return false;
+    }
+
+    QString normalizedPrefix = topicPrefix.trimmed();
+    while (normalizedPrefix.startsWith(QLatin1Char('/'))) {
+        normalizedPrefix.remove(0, 1);
+    }
+    while (normalizedPrefix.endsWith(QLatin1Char('/'))) {
+        normalizedPrefix.chop(1);
+    }
+    if (normalizedPrefix.isEmpty() || normalizedPrefix.contains(QLatin1Char('+'))
+        || normalizedPrefix.contains(QLatin1Char('#')) || normalizedPrefix.contains(QStringLiteral("//"))
+        || normalizedPrefix.toUtf8().size() > std::numeric_limits<quint16>::max()) {
+        *error = QStringLiteral("Enter a concrete MQTT topic prefix, such as frigate.");
+        return false;
+    }
+
+    *normalizedHost = parsed.host(QUrl::FullyDecoded);
+    *normalizedTopicPrefix = normalizedPrefix;
+    return true;
+}
+
 bool FrigateMonitor::updateCredentials(const QString &newUsername, const QString &password, QString *error)
 {
     const QString normalizedUsername = newUsername.trimmed();
@@ -1417,4 +1819,93 @@ QString FrigateMonitor::credentialKey(const QString &username) const
 {
     return QStringLiteral("frigate-password-")
         + QString::fromLatin1(QCryptographicHash::hash(username.toUtf8(), QCryptographicHash::Sha256).toHex());
+}
+
+bool FrigateMonitor::updateMqttCredentials(const QString &host, const QString &username, const QString &password,
+    QString *error)
+{
+    const QString normalizedUsername = username.trimmed();
+    const QString previousHost = m_mqttBrokerHost;
+    const QString previousUsername = m_mqttUsername;
+    if (normalizedUsername.isEmpty()) {
+        if (!password.isEmpty()) {
+            *error = QStringLiteral("Enter an MQTT username with the password.");
+            return false;
+        }
+        if (!previousUsername.isEmpty() && !deleteMqttPassword(previousHost, previousUsername, error)) {
+            return false;
+        }
+        m_mqttUsername.clear();
+        return true;
+    }
+
+    if (password.isEmpty()) {
+        if (!hasStoredMqttPassword(host, normalizedUsername, error)) {
+            if (error->isEmpty() || *error == QStringLiteral("Enter the Frigate password.")) {
+                *error = QStringLiteral("Enter the MQTT password.");
+            }
+            return false;
+        }
+    } else if (!saveMqttPassword(host, normalizedUsername, password, error)) {
+        return false;
+    }
+
+    if ((!previousUsername.isEmpty())
+        && mqttCredentialKey(previousHost, previousUsername) != mqttCredentialKey(host, normalizedUsername)
+        && !deleteMqttPassword(previousHost, previousUsername, error)) {
+        return false;
+    }
+    m_mqttUsername = normalizedUsername;
+    return true;
+}
+
+bool FrigateMonitor::loadMqttPassword(QString *password, QString *error) const
+{
+    const bool loaded = m_credentials.loadPassword(mqttCredentialKey(m_mqttBrokerHost, m_mqttUsername), password, error);
+    if (!loaded && *error == QStringLiteral("Enter the Frigate password.")) {
+        *error = QStringLiteral("Enter the MQTT password.");
+    }
+    return loaded;
+}
+
+bool FrigateMonitor::hasStoredMqttPassword(const QString &host, const QString &username, QString *error) const
+{
+    QString password;
+    const bool loaded = m_credentials.loadPassword(mqttCredentialKey(host, username), &password, error);
+    if (!loaded && *error == QStringLiteral("Enter the Frigate password.")) {
+        *error = QStringLiteral("Enter the MQTT password.");
+    }
+    return loaded;
+}
+
+bool FrigateMonitor::saveMqttPassword(const QString &host, const QString &username, const QString &password,
+    QString *error) const
+{
+    const bool saved = m_credentials.savePassword(mqttCredentialKey(host, username), password, error);
+    if (!saved && *error == QStringLiteral("Could not save the Frigate password in KDE Wallet.")) {
+        *error = QStringLiteral("Could not save the MQTT password in KDE Wallet.");
+    } else if (!saved && *error == QStringLiteral("Could not save the Frigate password in Windows Credential Manager.")) {
+        *error = QStringLiteral("Could not save the MQTT password in Windows Credential Manager.");
+    } else if (!saved && *error == QStringLiteral("The Frigate password is too large for Windows Credential Manager.")) {
+        *error = QStringLiteral("The MQTT password is too large for Windows Credential Manager.");
+    }
+    return saved;
+}
+
+bool FrigateMonitor::deleteMqttPassword(const QString &host, const QString &username, QString *error) const
+{
+    const bool deleted = m_credentials.deletePassword(mqttCredentialKey(host, username), error);
+    if (!deleted && *error == QStringLiteral("Could not remove the old Frigate password from KDE Wallet.")) {
+        *error = QStringLiteral("Could not remove the old MQTT password from KDE Wallet.");
+    } else if (!deleted && *error == QStringLiteral("Could not remove the old Frigate password from Windows Credential Manager.")) {
+        *error = QStringLiteral("Could not remove the old MQTT password from Windows Credential Manager.");
+    }
+    return deleted;
+}
+
+QString FrigateMonitor::mqttCredentialKey(const QString &host, const QString &username) const
+{
+    const QByteArray identity = host.toUtf8() + '\n' + username.toUtf8();
+    return QStringLiteral("mqtt-password-")
+        + QString::fromLatin1(QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex());
 }

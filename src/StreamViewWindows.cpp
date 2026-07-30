@@ -1,10 +1,12 @@
 #include "StreamView.h"
 
 #include <QJsonArray>
+#include <QDebug>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkCookie>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QResizeEvent>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -47,6 +49,11 @@ void StreamBridge::fallbackToJpeg(const QString &message)
     emit fallbackRequested(message.left(300));
 }
 
+void StreamBridge::reportDebug(const QString &message)
+{
+    emit debugReported(message.left(300));
+}
+
 namespace {
 QString javaScriptString(const QString &value)
 {
@@ -58,10 +65,11 @@ QString javaScriptString(const QString &value)
     return QString::fromUtf8(json);
 }
 
-QString windowsStreamHtml(const QUrl &serverUrl, const QString &streamName, quint64 session)
+QString windowsStreamHtml(const QUrl &serverUrl, const QString &streamName, quint64 session, int liveRetryTimeoutSeconds)
 {
     const QString server = javaScriptString(serverUrl.toString(QUrl::FullyEncoded));
     const QString camera = javaScriptString(streamName);
+    const QString firstFrameTimeoutMs = QString::number(qBound(1, liveRetryTimeoutSeconds, 15) * 1000);
     return QStringLiteral(R"HTML(
 <!doctype html>
 <html>
@@ -79,6 +87,7 @@ QString windowsStreamHtml(const QUrl &serverUrl, const QString &streamName, quin
     const server = %1;
     const camera = %2;
     const session = %3;
+    const firstFrameTimeoutMs = %4;
     const video = document.getElementById("feed");
     const videoCodecs = ["avc1.640029", "avc1.64002A", "avc1.640033", "hvc1.1.6.L153.B0", "av01.0.08M.08"];
     const audioCodecs = ["mp4a.40.2", "mp4a.40.5", "flac", "opus"];
@@ -105,7 +114,9 @@ QString windowsStreamHtml(const QUrl &serverUrl, const QString &streamName, quin
       window.chrome.webview.postMessage(JSON.stringify({session, type, value}));
     }
     function report(message) { notify("error", message); }
+    function debug(message) { notify("debug", message); }
     function fallback(message) {
+      debug(`fallback: ${message}`);
       shouldReconnect = false;
       clearTimeout(firstFrameTimer);
       clearTimeout(restartTimer);
@@ -144,6 +155,7 @@ QString windowsStreamHtml(const QUrl &serverUrl, const QString &streamName, quin
       clearTimeout(firstFrameTimer);
       clearTimeout(stablePlaybackTimer);
       recoveryAttempts += 1;
+      debug(`recovery ${recoveryAttempts}: ${reason}`);
       if (recoveryAttempts >= maxRecoveryAttempts) {
         fallback("Live stream failed repeatedly. Showing JPEG snapshots.");
         return;
@@ -201,6 +213,7 @@ QString windowsStreamHtml(const QUrl &serverUrl, const QString &streamName, quin
     }
     function start() {
       if (!shouldReconnect) return;
+      debug("starting MSE connection");
       const MediaSourceConstructor = window.ManagedMediaSource || window.MediaSource;
       if (!MediaSourceConstructor) { fallback("This system cannot play Frigate's MSE stream. Showing JPEG snapshots."); return; }
       const supportedVideo = videoCodecs.filter((codec) =>
@@ -240,7 +253,7 @@ QString windowsStreamHtml(const QUrl &serverUrl, const QString &streamName, quin
         }
         video.play().catch((error) => recover(`Live stream could not start: ${error.message || error}`));
         clearTimeout(firstFrameTimer);
-        firstFrameTimer = setTimeout(() => recover("Frigate connected but did not send playable video."), 6000);
+        firstFrameTimer = setTimeout(() => recover("Frigate connected but did not send playable video."), firstFrameTimeoutMs);
       };
       currentSocket.onmessage = (event) => {
         if (socket !== currentSocket || isRecovering || typeof event.data !== "string") return;
@@ -250,6 +263,7 @@ QString windowsStreamHtml(const QUrl &serverUrl, const QString &streamName, quin
         if (response.type !== "mse") return;
         try {
           if (!mediaSource || sourceBuffer) return;
+          debug(`announced ${response.value}`);
           if (!hasVideoCodec(response.value)) { fallback("Frigate returned an audio-only live stream. Showing JPEG snapshots."); return; }
           sourceBuffer = mediaSource.addSourceBuffer(response.value);
           if (sourceBuffer.mode) sourceBuffer.mode = "segments";
@@ -268,6 +282,7 @@ QString windowsStreamHtml(const QUrl &serverUrl, const QString &streamName, quin
     video.addEventListener("click", () => notify("dismiss"));
     video.addEventListener("loadeddata", () => {
       clearTimeout(firstFrameTimer);
+      debug("decoded first video frame");
       notify("connected");
       reportAspectRatio();
       lastPlaybackTime = video.currentTime;
@@ -304,7 +319,7 @@ QString windowsStreamHtml(const QUrl &serverUrl, const QString &streamName, quin
   </script>
 </body>
 </html>
-)HTML").arg(server, camera, QString::number(session));
+)HTML").arg(server, camera, QString::number(session), firstFrameTimeoutMs);
 }
 
 QString failureMessage(HRESULT result, bool hasCustomCa)
@@ -328,7 +343,8 @@ public:
         std::function<void(double)> reportAspectRatio,
         std::function<void()> dismiss,
         std::function<void()> connected,
-        std::function<void(const QString &)> fallback
+        std::function<void(const QString &)> fallback,
+        std::function<void(const QString &)> debug
     )
         : m_host(host)
         , m_hasCustomCa(hasCustomCa)
@@ -337,6 +353,7 @@ public:
         , m_dismiss(std::move(dismiss))
         , m_connected(std::move(connected))
         , m_fallback(std::move(fallback))
+        , m_debug(std::move(debug))
     {
         if (!m_profile.isValid()) {
             m_reportError(QStringLiteral(
@@ -366,13 +383,18 @@ public:
         }
     }
 
-    void start(const QUrl &serverUrl, const QString &streamName, const QList<QNetworkCookie> &cookies)
+    void start(
+        const QUrl &serverUrl,
+        const QString &streamName,
+        const QList<QNetworkCookie> &cookies,
+        int liveRetryTimeoutSeconds
+    )
     {
         if (!serverUrl.isValid() || streamName.trimmed().isEmpty()) {
             m_reportError(QStringLiteral("A valid Frigate stream is not available."));
             return;
         }
-        m_pending = {serverUrl, streamName, cookies, ++m_session};
+        m_pending = {serverUrl, streamName, cookies, qBound(1, liveRetryTimeoutSeconds, 15), ++m_session};
         if (m_webView) {
             loadPending();
         }
@@ -411,6 +433,7 @@ private:
         QUrl serverUrl;
         QString streamName;
         QList<QNetworkCookie> cookies;
+        int liveRetryTimeoutSeconds = 5;
         quint64 session = 0;
 
         explicit operator bool() const { return serverUrl.isValid() && !streamName.isEmpty(); }
@@ -537,7 +560,12 @@ private:
                 }
             }
         }
-        m_documentHtml = windowsStreamHtml(m_pending.serverUrl, m_pending.streamName, m_pending.session);
+        m_documentHtml = windowsStreamHtml(
+            m_pending.serverUrl,
+            m_pending.streamName,
+            m_pending.session,
+            m_pending.liveRetryTimeoutSeconds
+        );
         m_documentUrl = m_pending.serverUrl.resolved(QUrl(QStringLiteral("/.friedasbirdview-live")));
         m_webView->Navigate(reinterpret_cast<LPCWSTR>(m_documentUrl.toString(QUrl::FullyEncoded).utf16()));
     }
@@ -589,6 +617,8 @@ private:
         const QString type = message.value(QStringLiteral("type")).toString();
         if (type == QStringLiteral("error")) {
             m_reportError(message.value(QStringLiteral("value")).toString().left(300));
+        } else if (type == QStringLiteral("debug")) {
+            m_debug(message.value(QStringLiteral("value")).toString().left(300));
         } else if (type == QStringLiteral("aspectRatio")) {
             const double ratio = message.value(QStringLiteral("value")).toDouble();
             if (qIsFinite(ratio) && ratio >= 0.25 && ratio <= 8.0) {
@@ -622,33 +652,135 @@ private:
     std::function<void()> m_dismiss;
     std::function<void()> m_connected;
     std::function<void(const QString &)> m_fallback;
+    std::function<void(const QString &)> m_debug;
 };
 
 StreamView::StreamView(const QList<QSslCertificate> &customCaCertificates, QWidget *parent)
     : QWidget(parent)
+    , m_backgroundRetryTimer(this)
     , m_windowsBackend(std::make_unique<StreamViewWindowsBackend>(
           this,
           !customCaCertificates.isEmpty(),
-          [this](const QString &message) { emit errorChanged(message); },
+          [this](const QString &message) {
+              updateLiveStatus(QStringLiteral("Windows WebView2 MSE"), QStringLiteral("retrying"));
+              writeDebug(QStringLiteral("WebView2: %1").arg(message));
+              emit errorChanged(message);
+          },
           [this](double ratio) { emit aspectRatioChanged(ratio); },
           [this] { emit dismissRequested(); },
-          [this] { emit streamConnected(); },
-          [this](const QString &message) { emit jpegFallbackRequested(message); }
+          [this] { markStreamConnected(); },
+          [this](const QString &message) { scheduleBackgroundRetry(message); },
+          [this](const QString &message) { writeDebug(QStringLiteral("WebView2: %1").arg(message)); }
       ))
 {
     setFocusPolicy(Qt::NoFocus);
+    m_backgroundRetryTimer.setSingleShot(true);
+    connect(&m_backgroundRetryTimer, &QTimer::timeout, this, [this] {
+        if (m_streamActive) {
+            startSelectedPlayer();
+        }
+    });
 }
 
 StreamView::~StreamView() = default;
 
-void StreamView::start(const QUrl &serverUrl, const QString &streamName, const QList<QNetworkCookie> &cookies)
+void StreamView::start(
+    const QUrl &serverUrl,
+    const QString &streamName,
+    const QString &snapshotCameraName,
+    const QList<QNetworkCookie> &cookies,
+    LivePlaybackMethod method,
+    int liveRetryTimeoutSeconds,
+    bool debugEnabled
+)
 {
-    m_windowsBackend->start(serverUrl, streamName, cookies);
+    stop();
+    if (!serverUrl.isValid() || streamName.trimmed().isEmpty() || snapshotCameraName.trimmed().isEmpty()) {
+        emit errorChanged(QStringLiteral("A valid Frigate stream is not available."));
+        return;
+    }
+    m_streamActive = true;
+    m_pendingServerUrl = serverUrl;
+    m_pendingStreamName = streamName;
+    m_pendingSnapshotCameraName = snapshotCameraName;
+    m_pendingCookies = cookies;
+    m_selectedMethod = method;
+    m_liveRetryTimeoutSeconds = qBound(1, liveRetryTimeoutSeconds, 15);
+    m_debugEnabled = debugEnabled;
+    writeDebug(QStringLiteral("session started player=webview2-mse retry-timeout=%1s")
+        .arg(m_liveRetryTimeoutSeconds));
+    startSelectedPlayer();
 }
 
 void StreamView::stop()
 {
+    m_streamActive = false;
+    m_backgroundRetryTimer.stop();
     m_windowsBackend->stop();
+}
+
+void StreamView::startSelectedPlayer()
+{
+    if (!m_streamActive) {
+        return;
+    }
+    m_backgroundRetryTimer.stop();
+    // WebView2 has no hidden-page playback policy here. Keep the outer Qt JPEG
+    // preview until it reports a decoded frame.
+    emit jpegPreviewLocationChanged(false);
+    updateLiveStatus(QStringLiteral("Windows WebView2 MSE"), QStringLiteral("connecting"));
+    m_windowsBackend->start(
+        m_pendingServerUrl,
+        m_pendingStreamName,
+        m_pendingCookies,
+        m_liveRetryTimeoutSeconds
+    );
+}
+
+void StreamView::scheduleBackgroundRetry(const QString &message)
+{
+    if (!m_streamActive) {
+        return;
+    }
+    m_windowsBackend->stop();
+    emit jpegPreviewLocationChanged(false);
+    updateLiveStatus(QStringLiteral("Windows WebView2 MSE"), QStringLiteral("retrying in 2 seconds"));
+    writeDebug(QStringLiteral("background retry scheduled reason=%1").arg(message.left(180)));
+    emit errorChanged(message + QStringLiteral(" JPEG snapshots remain visible; retrying live video."));
+    m_backgroundRetryTimer.start(2000);
+}
+
+void StreamView::markStreamConnected()
+{
+    if (!m_streamActive) {
+        return;
+    }
+    m_backgroundRetryTimer.stop();
+    updateLiveStatus(QStringLiteral("Windows WebView2 MSE"), QStringLiteral("playing"));
+    writeDebug(QStringLiteral("live video is playing"));
+    emit streamConnected();
+}
+
+void StreamView::updateLiveStatus(const QString &method, const QString &state)
+{
+    if (m_liveStatusMethod == method && m_liveStatusState == state) {
+        return;
+    }
+    m_liveStatusMethod = method;
+    m_liveStatusState = state;
+    emit liveStatusChanged(method, state);
+}
+
+void StreamView::writeDebug(const QString &message) const
+{
+    if (m_debugEnabled) {
+        QString safeMessage = message.left(300);
+        safeMessage.replace(
+            QRegularExpression(QStringLiteral(R"((?:https?|wss?)://[^\s]+)")),
+            QStringLiteral("<url>")
+        );
+        qInfo().noquote() << QStringLiteral("FriedasBirdview live: %1").arg(safeMessage);
+    }
 }
 
 void StreamView::resizeEvent(QResizeEvent *event)

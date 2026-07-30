@@ -22,6 +22,8 @@ the project maintainer.
 ## What it does
 
 - Watches recent Frigate events and review activity every two seconds.
+- Can instead receive Frigate event and review updates over MQTT for lower
+  delivery latency, while retaining HTTP polling as the no-setup default.
 - Can start itself at sign-in through freedesktop XDG autostart on native
   Linux, the desktop Background portal in Flatpak, or the current-user Windows
   startup registry entry.
@@ -29,9 +31,10 @@ the project maintainer.
   object.
 - Shows the detected label, confidence, camera, and countdown.
 - Uses JPEG snapshots by default, with an authenticated low-latency go2rtc MSE
-  live-stream option. On Linux it first uses Qt Multimedia's system FFmpeg
-  backend, then the existing Qt WebEngine compatibility player, before falling
-  back to JPEG if playback is unavailable, stalls, or repeatedly fails.
+  live-stream option. On Linux, native MSE through Qt Multimedia and the system
+  FFmpeg backend is the default; progressive MP4 and Qt WebEngine MSE remain
+  selectable compatibility paths. Each safely falls back to JPEG if playback
+  is unavailable, stalls, or repeatedly fails.
 - Can play an opt-in, user-selected sound for a newly detected matching event.
 - Offers independent, optional cooldowns for automatic popups and sound alerts.
 - Stores an optional Frigate password in KDE Wallet on Linux or Windows
@@ -103,8 +106,11 @@ cmake --install build --prefix /your/chosen/prefix
 
 ![FriedasBirdview Settings](resources/FriedasBirdview-Settings.png)
 
-1. Start **FriedasBirdview** and open its tray icon’s **Settings**.
-2. Optionally enable **Start FriedasBirdview automatically when I sign in**.
+1. Start **FriedasBirdview** and open its tray icon’s **Settings**. Settings
+   are grouped into compact **General**, **Feed & alerts**, **Triggers**,
+   **Security**, and **Event delivery** tabs; the last selected tab is
+   remembered.
+2. On **General**, optionally enable **Start FriedasBirdview automatically when I sign in**.
    Native Linux installs use your desktop’s XDG autostart location, Flatpak
    installs ask the desktop’s Background portal for approval, and Windows uses
    the current user’s startup entry.
@@ -117,19 +123,40 @@ cmake --install build --prefix /your/chosen/prefix
    is saved in KDE Wallet on Linux or Windows Credential Manager on Windows,
    not in the application settings. Leave Password empty when applying
    unrelated settings to retain the saved password.
-5. If Frigate uses a private CA, add its public root/issuing CA certificate in
-   **Custom certificate authorities**, then restart FriedasBirdview before
+5. If Frigate uses a private CA, open **Security** and add its public
+   root/issuing CA certificate in **Custom certificate authorities**, then restart FriedasBirdview before
    using live video. This adds only that CA as a trust anchor; certificate
    host-name and expiry checks remain enabled.
-6. Set **Keep feed open** and select **JPEG snapshots** or **Live stream**.
-7. Optionally enable **Sound alerts**, then choose a sound and volume. Use
+6. Open **Feed & alerts** to set **Keep feed open** and select **JPEG snapshots** or **Live stream**.
+   On Linux, choose **Native MSE** for the lowest-latency default. The
+   progressive-MP4 and WebEngine choices are compatibility options. **Try next
+   live player after** controls how long each live-player attempt has to
+   produce a frame. JPEG starts immediately and remains visible while the app
+   moves to the next compatible player or retries the selected one in the
+   background; it switches to video only after a decoded frame arrives. The
+   default is 5 seconds; use a shorter time for doorbell-like feeds or raise
+   it when a camera has a slow key-frame interval. Enable **Write live-player
+   diagnostics to terminal output** for concise state lines that omit server
+   addresses, camera names, credentials, cookies, and tokens.
+7. In **Event delivery**, keep **HTTP polling** for the compatible default or
+   select **MQTT** for lower event-delivery latency. MQTT requires the broker
+   host, port, TLS choice, topic prefix (normally `frigate`), and optionally a
+   dedicated read-only broker account. Its password is stored only in KDE
+   Wallet or Windows Credential Manager. Custom CAs from **Security** also
+   apply to TLS MQTT connections. MQTT reduces app delivery delay but does not
+   reduce Frigate's own detection or camera-stream startup time. Use **Test
+   connection** after applying the settings to verify TLS, credentials, and
+   both Frigate topic subscriptions without changing active monitoring.
+8. With HTTP polling, enable **Fast event detection** for doorbell-like feeds. It checks Frigate
+   once per second instead of every two seconds, at twice the API-polling load.
+9. Optionally enable **Sound alerts**, then choose a sound and volume. Use
    **Preview** to test the selected alert.
-8. Optionally enable a **Popup cooldown** or **Sound cooldown** and choose an
+10. Optionally enable a **Popup cooldown** or **Sound cooldown** and choose an
    interval from 1 second to 1 hour. Manual **Show Feed** and sound **Preview**
    remain available during a cooldown.
-9. Select **Selected classifications** and tick the labels/sub-labels that
+11. In **Triggers**, select **Selected classifications** and tick the labels/sub-labels that
    should open a feed, or choose **Any tracked object**.
-10. Use **Refresh from Frigate** to retrieve known labels and sub-labels. You
+12. Use **Refresh from Frigate** to retrieve known labels and sub-labels. You
    can always add a custom name, for example `Frieda`.
 
 Fresh installs use the intentionally unreachable `https://frigate.invalid`
@@ -150,12 +177,12 @@ For **Live stream**, the selected camera needs a working Frigate/go2rtc MSE
 restream and a codec the platform player can play. FriedasBirdview uses the Frigate
 configuration mapping `cameras.<camera>.live.streams`; a camera name is not
 assumed to be the go2rtc stream name. No extra Frigate ports, RTSP credentials,
-or per-camera restream configuration is required. Linux first feeds go2rtc's
-authenticated progressive MP4 endpoint to Qt Multimedia's FFmpeg backend; it
-falls back to the native MSE relay if that endpoint is unavailable. This avoids
-Qt WebEngine's Chromium codec build. The Qt WebEngine player remains the
-compatibility fallback, followed by **JPEG snapshots** after incompatible,
-stalled, or repeatedly failed playback. Windows uses Edge WebView2 for live
+or per-camera restream configuration is required. Linux opens the native MSE
+relay first by default because it avoids progressive HTTP's added latency while
+still using Qt Multimedia's system FFmpeg decoder. Progressive MP4 and Qt
+WebEngine MSE can be selected for compatibility. All paths ultimately fall
+back to **JPEG snapshots** after incompatible, stalled, or repeatedly failed
+playback. Windows uses Edge WebView2 for live
 playback, so it uses the H.264 support already maintained by Windows rather
 than bundling a proprietary codec library.
 
@@ -172,13 +199,14 @@ records and filters them by object classification.
 | --- | --- |
 | Tray icon is red | Confirm the URL, Frigate availability, TLS trust, and login details. |
 | No popup | Confirm monitoring is running. Temporarily choose **Any tracked object**, then inspect the tray menu’s last activity. |
+| MQTT does not connect | Confirm Frigate is configured for MQTT, the broker host/port and topic prefix are correct, and the broker account can subscribe to `<prefix>/events` and `<prefix>/reviews`. Prefer TLS; add its issuing CA in **Security** if needed. |
 | A new event did not reopen the feed or play a sound | Check whether the respective cooldown is enabled and has not yet elapsed. |
 | A name never triggers | Add the exact event label or sub-label reported by Frigate. A Birdseye image without a new event does not count. |
 | Password cannot be saved | On Linux, enable and unlock KDE Wallet; on Windows, check Credential Manager access for the current user. Then apply the settings again. |
 | The app does not start after sign-in | Confirm the **Startup** switch is enabled. Linux native installs use XDG autostart, Flatpak requires desktop Background portal approval, and Windows uses the current user’s startup entry. Re-enable after moving a native Linux executable. |
 | No sound is heard | Enable **Sound alerts**, use **Preview**, and check the desktop output device and volume. |
 | Private CA works for JPEG but not live video on Windows | WebView2 trusts the Windows Current User certificate store. Import Frigate’s issuing CA there; FriedasBirdview never bypasses certificate validation. Linux native packages use the private NSS database, and the Flatpak includes `certutil`. |
-| Live stream switches to JPEG | Confirm the stream plays in Frigate and a compatible go2rtc codec is available. On Linux, confirm the Qt Multimedia FFmpeg backend is installed; FriedasBirdview tries it before the Qt WebEngine compatibility player and then falls back rather than showing a black panel. |
+| Live stream switches to JPEG | Confirm the stream plays in Frigate and a compatible go2rtc codec is available. On Linux, start with **Native MSE**; the progressive-MP4 and Qt WebEngine options are available for compatibility testing. |
 | Feed is on the wrong screen | Drag it to the intended display once. On Wayland placement is ultimately controlled by KWin. |
 
 ## Project notes

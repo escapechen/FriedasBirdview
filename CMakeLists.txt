@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(FriedasBirdview VERSION 1.9.0 LANGUAGES CXX)
+project(FriedasBirdview VERSION 1.10.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -90,6 +90,9 @@ qt_add_executable(friedasbirdview
     src/CustomCaPlatform.h
     src/FrigateMonitor.cpp
     src/FrigateMonitor.h
+    src/LivePlaybackMethod.h
+    src/MqttClient.cpp
+    src/MqttClient.h
     src/OverlayWindow.cpp
     src/OverlayWindow.h
     src/SettingsDialog.cpp

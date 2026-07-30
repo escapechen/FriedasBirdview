@@ -6,6 +6,48 @@
 #include <QGuiApplication>
 #include <QIcon>
 
+namespace {
+
+void appendWebEngineFlag(QByteArray *flags, const QByteArray &flag)
+{
+    if (flags->contains(flag)) {
+        return;
+    }
+    if (!flags->trimmed().isEmpty()) {
+        flags->append(' ');
+    }
+    flags->append(flag);
+}
+
+void enableBackgroundLivePlayback()
+{
+    // The compatibility page remains mapped while its own JPEG preview covers
+    // the MSE video. These flags are a defence in depth for QtWebEngine builds
+    // that still classify a non-activating overlay as background media. They
+    // disable only that media suspension policy; they do not weaken Chromium's
+    // renderer sandbox or certificate validation.
+    QByteArray flags = qgetenv("QTWEBENGINE_CHROMIUM_FLAGS");
+    appendWebEngineFlag(&flags, "--disable-background-media-suspend");
+
+    constexpr auto featureSwitch = "--disable-features=";
+    constexpr auto pauseOptimization = "BackgroundVideoPauseOptimization";
+    const qsizetype featureStart = flags.indexOf(featureSwitch);
+    if (featureStart < 0) {
+        appendWebEngineFlag(&flags, QByteArray(featureSwitch) + pauseOptimization);
+    } else {
+        const qsizetype valueStart = featureStart + QByteArray(featureSwitch).size();
+        const qsizetype valueEnd = flags.indexOf(' ', valueStart);
+        const qsizetype valueLength = (valueEnd < 0 ? flags.size() : valueEnd) - valueStart;
+        const QByteArray features = flags.mid(valueStart, valueLength);
+        if (!features.split(',').contains(pauseOptimization)) {
+            flags.replace(valueStart, valueLength, features + ',' + pauseOptimization);
+        }
+    }
+    qputenv("QTWEBENGINE_CHROMIUM_FLAGS", flags);
+}
+
+} // namespace
+
 int main(int argc, char *argv[])
 {
 #if defined(Q_OS_LINUX)
@@ -40,6 +82,8 @@ int main(int argc, char *argv[])
         && !qEnvironmentVariableIsEmpty("DISPLAY")) {
         qputenv("QT_QPA_PLATFORM", "xcb");
     }
+
+    enableBackgroundLivePlayback();
 #endif
     // When portal integration is active (for example in a sandbox), it looks
     // up this ID while QApplication starts. It is also the desktop-entry ID

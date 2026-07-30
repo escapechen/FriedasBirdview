@@ -11,6 +11,7 @@
 #include <QLocale>
 #include <QMouseEvent>
 #include <QMoveEvent>
+#include <QPainter>
 #include <QResizeEvent>
 #include <QScreen>
 #include <QSettings>
@@ -32,6 +33,15 @@ signals:
     void clicked();
 
 protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        // The JPEG may letterbox. Paint every pixel first so a live-player
+        // artwork/background underneath can never show through those bars.
+        QPainter painter(this);
+        painter.fillRect(event->rect(), QColor(QStringLiteral("#050505")));
+        QLabel::paintEvent(event);
+    }
+
     void mouseReleaseEvent(QMouseEvent *event) override
     {
         if (event->button() == Qt::LeftButton) {
@@ -177,6 +187,22 @@ OverlayWindow::OverlayWindow(const QList<QSslCertificate> &customCaCertificates,
     m_detailLabel->setStyleSheet(QStringLiteral("color: #e7eff7; background: #276998; border-radius: 8px; padding: 4px 8px;"));
     layout->addWidget(m_detailLabel, 0, Qt::AlignLeft);
 
+    auto *badges = new QHBoxLayout;
+    badges->setContentsMargins(0, 0, 0, 0);
+    badges->setSpacing(5);
+    m_displayBadge = new QLabel(frame);
+    m_displayBadge->setStyleSheet(QStringLiteral(
+        "color: #eaf6ff; background: #245d7d; border-radius: 7px; padding: 3px 7px; font-size: 11px; font-weight: 600;"
+    ));
+    m_liveBadge = new QLabel(frame);
+    m_liveBadge->setStyleSheet(QStringLiteral(
+        "color: #e9e5ff; background: #504078; border-radius: 7px; padding: 3px 7px; font-size: 11px; font-weight: 600;"
+    ));
+    badges->addWidget(m_displayBadge, 0, Qt::AlignLeft);
+    badges->addWidget(m_liveBadge, 0, Qt::AlignLeft);
+    badges->addStretch();
+    layout->addLayout(badges);
+
     auto *feedContainer = new QWidget(frame);
     feedContainer->setStyleSheet(QStringLiteral("background: #050505; border-radius: 8px;"));
     m_feedStack = new QStackedLayout(feedContainer);
@@ -186,7 +212,11 @@ OverlayWindow::OverlayWindow(const QList<QSslCertificate> &customCaCertificates,
     m_snapshotLabel->setAlignment(Qt::AlignCenter);
     m_snapshotLabel->setMinimumHeight(180);
     m_snapshotLabel->setText(QStringLiteral("Loading JPEG snapshot…"));
-    m_snapshotLabel->setStyleSheet(QStringLiteral("color: #d5dde5;"));
+    // This preview is the only visible feed until a live player reports a
+    // decoded frame. Its backing is deliberately opaque for JPEG letterboxes.
+    m_snapshotLabel->setAutoFillBackground(true);
+    m_snapshotLabel->setAttribute(Qt::WA_OpaquePaintEvent);
+    m_snapshotLabel->setStyleSheet(QStringLiteral("color: #d5dde5; background: #050505;"));
     m_streamView = new StreamView(customCaCertificates, feedContainer);
     m_feedStack->addWidget(m_snapshotLabel);
     m_feedStack->addWidget(m_streamView);
@@ -242,28 +272,46 @@ OverlayWindow::OverlayWindow(const QList<QSslCertificate> &customCaCertificates,
     connect(m_zoomButton, &QToolButton::clicked, this, &OverlayWindow::toggleZoom);
     connect(m_streamView, &StreamView::dismissRequested, this, &OverlayWindow::dismiss);
     connect(m_streamView, &StreamView::errorChanged, this, [this](const QString &message) {
+        if (m_monitor && isVisible() && m_requestedMode == FrigateMonitor::FeedMode::LiveStream
+            && !m_usingJpegFallback && !m_webEngineOwnsPreview) {
+            // Retain a usable image while a decoder retries.  This also makes
+            // a camera that is late with its next key frame feel responsive
+            // instead of exposing an empty video surface.
+            showSnapshotWhileLiveStarts();
+        }
         m_errorLabel->setText(message);
         m_errorLabel->show();
     });
+    connect(m_streamView, &StreamView::jpegPreviewLocationChanged, this, [this](bool insideLivePlayer) {
+        m_webEngineOwnsPreview = insideLivePlayer;
+        if (insideLivePlayer) {
+            showWebEngineJpegPreview();
+        } else {
+            showSnapshotWhileLiveStarts();
+        }
+    });
     connect(m_streamView, &StreamView::streamConnected, this, [this] {
+        showLiveStream();
         m_errorLabel->hide();
     });
+    connect(m_streamView, &StreamView::liveStatusChanged, this, &OverlayWindow::updateLiveStatus);
     connect(m_streamView, &StreamView::jpegFallbackRequested, this, &OverlayWindow::activateJpegFallback);
     connect(m_streamView, &StreamView::aspectRatioChanged, this, &OverlayWindow::applyAspectRatio);
+    updateStreamBadges();
 }
 
 void OverlayWindow::setMonitor(FrigateMonitor *monitor)
 {
     m_monitor = monitor;
-    connect(m_monitor, &FrigateMonitor::snapshotReady, this, [this](const QByteArray &data) {
+    connect(m_monitor, &FrigateMonitor::snapshotReady, this, [this](const QByteArray &imageData) {
         QPixmap snapshot;
-        if (!snapshot.loadFromData(data)) {
+        if (!snapshot.loadFromData(imageData)) {
             m_errorLabel->setText(QStringLiteral("Frigate returned an invalid JPEG snapshot."));
             m_errorLabel->show();
             return;
         }
         m_snapshot = snapshot;
-        if (!m_usingJpegFallback) {
+        if (!m_usingJpegFallback && !m_waitingForLiveStream) {
             m_errorLabel->hide();
         }
         applyAspectRatio(static_cast<double>(snapshot.width()) / static_cast<double>(snapshot.height()));
@@ -307,6 +355,8 @@ void OverlayWindow::present()
     restoreSavedGeometry();
     updateActivity(m_monitor->activity());
     m_usingJpegFallback = false;
+    m_waitingForLiveStream = false;
+    m_webEngineOwnsPreview = false;
     configureFeed(true);
     show();
     m_countdownTimer->start();
@@ -412,6 +462,8 @@ void OverlayWindow::configureFeed(bool force)
     if (requestedMode != m_requestedMode
         || (m_usingJpegFallback && (camera != m_shownCamera || stream != m_shownStream))) {
         m_usingJpegFallback = false;
+        m_waitingForLiveStream = false;
+        m_webEngineOwnsPreview = false;
     }
     m_requestedMode = requestedMode;
     const FrigateMonitor::FeedMode mode = m_usingJpegFallback
@@ -427,16 +479,27 @@ void OverlayWindow::configureFeed(bool force)
     m_shownStream = stream;
     m_errorLabel->hide();
     if (mode == FrigateMonitor::FeedMode::Jpeg) {
+        m_waitingForLiveStream = false;
         m_streamView->stop();
         m_feedStack->setCurrentWidget(m_snapshotLabel);
+        m_snapshotLabel->raise();
         m_snapshotLabel->setText(QStringLiteral("Loading JPEG snapshot…"));
         m_snapshotTimer->start();
         m_monitor->requestSnapshot();
     } else {
-        m_snapshotTimer->stop();
-        m_feedStack->setCurrentWidget(m_streamView);
-        m_streamView->start(m_monitor->baseUrl(), stream, m_monitor->authenticationCookies());
+        m_waitingForLiveStream = true;
+        m_streamView->start(
+            m_monitor->baseUrl(),
+            stream,
+            camera,
+            m_monitor->authenticationCookies(),
+            m_monitor->livePlaybackMethod(),
+            m_monitor->liveStartupTimeoutSeconds(),
+            m_monitor->isLiveDebugEnabled()
+        );
+        showSnapshotWhileLiveStarts();
     }
+    updateStreamBadges();
 }
 
 void OverlayWindow::activateJpegFallback(const QString &message)
@@ -446,16 +509,93 @@ void OverlayWindow::activateJpegFallback(const QString &message)
     }
 
     m_usingJpegFallback = true;
+    m_waitingForLiveStream = false;
+    m_webEngineOwnsPreview = false;
     m_shownMode = FrigateMonitor::FeedMode::Jpeg;
     m_shownCamera = m_monitor->currentFeedCameraName();
     m_shownStream = m_monitor->currentFeedStreamName();
     m_streamView->stop();
     m_feedStack->setCurrentWidget(m_snapshotLabel);
+    m_snapshotLabel->raise();
     m_snapshotLabel->setText(QStringLiteral("Loading JPEG snapshot…"));
     m_snapshotTimer->start();
     m_monitor->requestSnapshot();
     m_errorLabel->setText(message);
     m_errorLabel->show();
+    updateStreamBadges();
+}
+
+void OverlayWindow::showSnapshotWhileLiveStarts()
+{
+    if (!m_monitor || m_requestedMode != FrigateMonitor::FeedMode::LiveStream
+        || m_usingJpegFallback) {
+        return;
+    }
+    m_waitingForLiveStream = true;
+    m_webEngineOwnsPreview = false;
+    m_feedStack->setCurrentWidget(m_snapshotLabel);
+    m_snapshotLabel->raise();
+    if (m_snapshot.isNull()) {
+        m_snapshotLabel->setText(QStringLiteral("Loading JPEG snapshot…"));
+    } else {
+        updateSnapshotPixmap();
+    }
+    m_snapshotTimer->start();
+    m_monitor->requestSnapshot();
+    updateStreamBadges();
+}
+
+void OverlayWindow::showWebEngineJpegPreview()
+{
+    if (!m_monitor || m_requestedMode != FrigateMonitor::FeedMode::LiveStream
+        || m_usingJpegFallback) {
+        return;
+    }
+    // Qt WebEngine must be mapped while it calls video.play(). Its own page
+    // displays an authenticated JPEG preview above the MSE video until a
+    // decoded frame arrives, avoiding both a blank surface and Chromium's
+    // background-video power pause.
+    m_waitingForLiveStream = true;
+    m_snapshotTimer->stop();
+    m_feedStack->setCurrentWidget(m_streamView);
+    m_streamView->raise();
+    updateStreamBadges();
+}
+
+void OverlayWindow::showLiveStream()
+{
+    if (!m_monitor || m_requestedMode != FrigateMonitor::FeedMode::LiveStream
+        || m_usingJpegFallback) {
+        return;
+    }
+    m_waitingForLiveStream = false;
+    m_snapshotTimer->stop();
+    m_feedStack->setCurrentWidget(m_streamView);
+    m_streamView->raise();
+    updateStreamBadges();
+}
+
+void OverlayWindow::updateLiveStatus(const QString &method, const QString &state)
+{
+    m_liveMethod = method;
+    m_liveState = state;
+    updateStreamBadges();
+}
+
+void OverlayWindow::updateStreamBadges()
+{
+    if (!m_displayBadge || !m_liveBadge) {
+        return;
+    }
+    if (m_requestedMode == FrigateMonitor::FeedMode::Jpeg || m_usingJpegFallback) {
+        m_displayBadge->setText(QStringLiteral("JPEG snapshots"));
+        m_liveBadge->setText(QStringLiteral("Live player idle"));
+        return;
+    }
+    m_displayBadge->setText(m_waitingForLiveStream
+        ? QStringLiteral("JPEG while live connects")
+        : QStringLiteral("Live video"));
+    m_liveBadge->setText(QStringLiteral("%1 · %2").arg(m_liveMethod, m_liveState));
 }
 
 void OverlayWindow::updateSnapshotPixmap()

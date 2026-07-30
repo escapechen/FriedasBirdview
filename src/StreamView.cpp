@@ -1,12 +1,14 @@
 #include "StreamView.h"
 
 #include <QAbstractSocket>
+#include <QDebug>
 #include <QElapsedTimer>
 #include <QHostAddress>
 #include <QJsonObject>
 #include <QMouseEvent>
-#include <QPainter>
-#include <QPixmap>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+#include <QPlaybackOptions>
+#endif
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QMediaPlayer>
@@ -15,6 +17,7 @@
 #include <QNetworkRequest>
 #include <QQueue>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 #include <QSslConfiguration>
 #include <QSslError>
 #include <QSslSocket>
@@ -47,6 +50,8 @@ constexpr int kNativePlaybackAttempts = 2;
 constexpr int kNativeFirstFrameTimeoutMs = 7000;
 constexpr int kNativeStallTimeoutMs = 5000;
 constexpr int kNativeFramesBeforeAcceptingPlayback = 3;
+constexpr int kNativeTransportSwitchDelayMs = 100;
+constexpr int kNativeRetryDelayMs = 500;
 
 class LocalStreamRelay final : public QObject {
 public:
@@ -227,48 +232,6 @@ private:
 
 } // namespace
 
-class StreamArtworkWidget final : public QWidget {
-public:
-    StreamArtworkWidget(QWidget *parent, std::function<void()> dismiss)
-        : QWidget(parent)
-        , m_artwork(QStringLiteral(":/docs/images/frieda-birdview-hero.png"))
-        , m_dismiss(std::move(dismiss))
-    {
-        setFocusPolicy(Qt::NoFocus);
-        setCursor(Qt::PointingHandCursor);
-        setToolTip(QStringLiteral("Live video is reconnecting. Click to dismiss the feed."));
-    }
-
-protected:
-    void paintEvent(QPaintEvent *event) override
-    {
-        Q_UNUSED(event)
-        QPainter painter(this);
-        painter.fillRect(rect(), QColor(QStringLiteral("#050505")));
-        if (m_artwork.isNull()) {
-            return;
-        }
-        const QSize targetSize = m_artwork.size().scaled(size(), Qt::KeepAspectRatio);
-        const QRect target(QPoint((width() - targetSize.width()) / 2, (height() - targetSize.height()) / 2), targetSize);
-        painter.setRenderHint(QPainter::SmoothPixmapTransform);
-        painter.drawPixmap(target, m_artwork);
-    }
-
-    void mouseReleaseEvent(QMouseEvent *event) override
-    {
-        if (event->button() == Qt::LeftButton) {
-            m_dismiss();
-            event->accept();
-            return;
-        }
-        QWidget::mouseReleaseEvent(event);
-    }
-
-private:
-    QPixmap m_artwork;
-    std::function<void()> m_dismiss;
-};
-
 class NativeStreamPlayer final : public QObject {
 public:
     NativeStreamPlayer(
@@ -278,7 +241,8 @@ public:
         std::function<void(double)> reportAspectRatio,
         std::function<void()> dismiss,
         std::function<void()> connected,
-        std::function<void(const QString &)> failed
+        std::function<void(const QString &)> failed,
+        std::function<void(const QString &)> debug
     )
         : QObject(host)
         , m_customCaCertificates(customCaCertificates)
@@ -290,8 +254,14 @@ public:
         , m_reportAspectRatio(std::move(reportAspectRatio))
         , m_connected(std::move(connected))
         , m_failed(std::move(failed))
+        , m_debug(std::move(debug))
     {
         m_player.setVideoOutput(m_video);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+        QPlaybackOptions playbackOptions = m_player.playbackOptions();
+        playbackOptions.setPlaybackIntent(QPlaybackOptions::PlaybackIntent::LowLatencyStreaming);
+        m_player.setPlaybackOptions(playbackOptions);
+#endif
         m_firstFrameTimer.setSingleShot(true);
         m_stallTimer.setInterval(2000);
 
@@ -320,7 +290,13 @@ public:
         return m_video;
     }
 
-    void start(const QUrl &serverUrl, const QString &streamName, const QList<QNetworkCookie> &cookies)
+    void start(
+        const QUrl &serverUrl,
+        const QString &streamName,
+        const QList<QNetworkCookie> &cookies,
+        LivePlaybackMethod method,
+        int firstFrameTimeoutMs
+    )
     {
         stop();
         m_serverUrl = serverUrl;
@@ -328,7 +304,13 @@ public:
         m_cookies = cookies;
         m_active = true;
         m_attempt = 0;
-        m_transport = NativeTransport::ProgressiveHttp;
+        m_firstFrameTimeoutMs = qBound(1000, firstFrameTimeoutMs, 15000);
+        m_transport = method == LivePlaybackMethod::ProgressiveMp4
+            ? NativeTransport::ProgressiveHttp
+            : NativeTransport::MseWebSocket;
+        m_debug(QStringLiteral("native start transport=%1 first-frame-timeout=%2ms")
+            .arg(m_transport == NativeTransport::ProgressiveHttp ? QStringLiteral("progressive-mp4") : QStringLiteral("mse"))
+            .arg(m_firstFrameTimeoutMs));
         startTransport();
     }
 
@@ -394,6 +376,9 @@ private:
         if (!m_receivedFrame) {
             m_receivedFrame = true;
             m_firstFrameTimer.stop();
+            m_debug(QStringLiteral("native decoded stable frame size=%1x%2")
+                .arg(frameSize.width())
+                .arg(frameSize.height()));
             m_connected();
             m_reportAspectRatio(static_cast<double>(frameSize.width()) / frameSize.height());
         }
@@ -473,7 +458,7 @@ private:
         m_mediaStarted = true;
         m_player.setSource(m_relay.url());
         m_player.play();
-        m_firstFrameTimer.start(kNativeFirstFrameTimeoutMs);
+        m_firstFrameTimer.start(m_firstFrameTimeoutMs);
         m_stallTimer.start();
     }
 
@@ -535,6 +520,7 @@ private:
         }
         if (!m_relay.start()) {
             m_active = false;
+            m_debug(QStringLiteral("native relay could not start"));
             m_failed(QStringLiteral("Could not start the native live-stream relay."));
             return;
         }
@@ -625,6 +611,7 @@ private:
             return;
         }
         const QString mimeType = response.value(QStringLiteral("value")).toString();
+        m_debug(QStringLiteral("native MSE announced %1").arg(mimeType.left(180)));
         if (!mimeType.startsWith(QStringLiteral("video/mp4"), Qt::CaseInsensitive)
             || !mimeType.contains(QStringLiteral("codecs="), Qt::CaseInsensitive)) {
             recover(QStringLiteral("Frigate did not return a compatible native video stream."));
@@ -640,6 +627,9 @@ private:
             return;
         }
         m_recovering = true;
+        m_debug(QStringLiteral("native recovery reason=%1 attempt=%2")
+            .arg(reason.left(180))
+            .arg(m_attempt + 1));
         m_firstFrameTimer.stop();
         m_stallTimer.stop();
         closeSocket();
@@ -650,8 +640,9 @@ private:
         if (m_transport == NativeTransport::ProgressiveHttp && !m_receivedFrame) {
             m_transport = NativeTransport::MseWebSocket;
             m_attempt = 0;
+            m_debug(QStringLiteral("native switching progressive-mp4 to mse"));
             m_reportError(reason + QStringLiteral(" Trying the native MSE relay…"));
-            QTimer::singleShot(1200, this, [this] {
+            QTimer::singleShot(kNativeTransportSwitchDelayMs, this, [this] {
                 if (!m_active) {
                     return;
                 }
@@ -663,7 +654,7 @@ private:
 
         if (++m_attempt < kNativePlaybackAttempts) {
             m_reportError(reason + QStringLiteral(" Retrying with the native decoder…"));
-            QTimer::singleShot(1200, this, [this] {
+            QTimer::singleShot(kNativeRetryDelayMs, this, [this] {
                 if (!m_active) {
                     return;
                 }
@@ -675,6 +666,7 @@ private:
 
         m_active = false;
         m_recovering = false;
+        m_debug(QStringLiteral("native attempts exhausted"));
         m_failed(reason);
     }
 
@@ -695,7 +687,9 @@ private:
     std::function<void(double)> m_reportAspectRatio;
     std::function<void()> m_connected;
     std::function<void(const QString &)> m_failed;
+    std::function<void(const QString &)> m_debug;
     NativeTransport m_transport = NativeTransport::ProgressiveHttp;
+    int m_firstFrameTimeoutMs = kNativeFirstFrameTimeoutMs;
     int m_attempt = 0;
     QSize m_candidateFrameSize;
     int m_candidateFrameCount = 0;
@@ -770,8 +764,14 @@ void StreamBridge::fallbackToJpeg(const QString &message)
     emit fallbackRequested(message.left(300));
 }
 
+void StreamBridge::reportDebug(const QString &message)
+{
+    emit debugReported(message.left(300));
+}
+
 StreamView::StreamView(const QList<QSslCertificate> &customCaCertificates, QWidget *parent)
     : QWidget(parent)
+    , m_backgroundRetryTimer(this)
     , m_customCaCertificates(customCaCertificates)
     , m_view(new QWebEngineView(this))
     , m_channel(new QWebChannel(this))
@@ -800,17 +800,32 @@ StreamView::StreamView(const QList<QSslCertificate> &customCaCertificates, QWidg
     m_channel->registerObject(QStringLiteral("streamBridge"), m_bridge);
     m_page->setWebChannel(m_channel);
     m_view->setPage(m_page);
+    // The JPEG preview is deliberately the visible widget while the
+    // compatibility player prepares. Keep Chromium's page lifecycle active so
+    // it does not classify this authenticated live feed as power-saveable
+    // background video and interrupt video.play().
+    m_page->setLifecycleState(QWebEnginePage::LifecycleState::Active);
     m_view->setContextMenuPolicy(Qt::NoContextMenu);
     m_view->setFocusPolicy(Qt::NoFocus);
     setFocusPolicy(Qt::NoFocus);
+    m_backgroundRetryTimer.setSingleShot(true);
+    connect(&m_backgroundRetryTimer, &QTimer::timeout, this, [this] {
+        if (m_streamActive) {
+            startSelectedPlayer();
+        }
+    });
 
     m_nativePlayer = std::make_unique<NativeStreamPlayer>(
         m_customCaCertificates,
         this,
         [this](const QString &message) {
-            if (m_usingNativePlayer && m_layout && m_artwork) {
-                m_layout->setCurrentWidget(m_artwork);
+            if (m_usingNativePlayer && m_layout && m_nativePlayer) {
+                // Keep the video sink attached and mapped for retries, but do
+                // not present the artwork as a substitute for the JPEG layer.
+                m_layout->setCurrentWidget(m_nativePlayer->videoWidget());
             }
+            updateLiveStatus(m_liveStatusMethod, QStringLiteral("retrying"));
+            writeDebug(QStringLiteral("native player: %1").arg(message));
             emit errorChanged(message);
         },
         [this](double ratio) {
@@ -823,16 +838,19 @@ StreamView::StreamView(const QList<QSslCertificate> &customCaCertificates, QWidg
             if (m_usingNativePlayer && m_layout && m_nativePlayer) {
                 m_layout->setCurrentWidget(m_nativePlayer->videoWidget());
             }
-            emit streamConnected();
+            markStreamConnected();
         },
         [this](const QString &message) {
             if (!m_usingNativePlayer) {
                 return;
             }
             m_usingNativePlayer = false;
+            updateLiveStatus(QStringLiteral("Qt WebEngine MSE"), QStringLiteral("connecting"));
+            writeDebug(QStringLiteral("native player exhausted; trying Qt WebEngine MSE"));
             emit errorChanged(message + QStringLiteral(" Trying the compatibility player…"));
             startWebEngineFallback();
-        }
+        },
+        [this](const QString &message) { writeDebug(message); }
     );
 
     connect(m_page, &QWebEnginePage::certificateError, this, [this](const QWebEngineCertificateError &error) {
@@ -848,6 +866,8 @@ StreamView::StreamView(const QList<QSslCertificate> &customCaCertificates, QWidg
                 "The live-stream TLS certificate was rejected. Check its name, date, and trust chain."
             ));
         }
+        updateLiveStatus(QStringLiteral("Qt WebEngine MSE"), QStringLiteral("TLS rejected"));
+        writeDebug(QStringLiteral("compatibility player TLS rejected"));
         // Deliberately do not accept the certificate: both HTTPS and WSS must
         // retain normal Chromium certificate validation.
     });
@@ -855,13 +875,12 @@ StreamView::StreamView(const QList<QSslCertificate> &customCaCertificates, QWidg
     m_layout = new QStackedLayout(this);
     m_layout->setContentsMargins(0, 0, 0, 0);
     m_layout->addWidget(m_nativePlayer->videoWidget());
-    m_artwork = new StreamArtworkWidget(this, [this] { emit dismissRequested(); });
-    m_layout->addWidget(m_artwork);
     m_layout->addWidget(m_view);
-    m_layout->setCurrentWidget(m_artwork);
 
     connect(m_bridge, &StreamBridge::errorReported, this, [this](const QString &message) {
         if (m_browserFallbackActive) {
+            updateLiveStatus(QStringLiteral("Qt WebEngine MSE"), QStringLiteral("retrying"));
+            writeDebug(QStringLiteral("compatibility player: %1").arg(message));
             emit errorChanged(message);
         }
     });
@@ -877,12 +896,17 @@ StreamView::StreamView(const QList<QSslCertificate> &customCaCertificates, QWidg
     });
     connect(m_bridge, &StreamBridge::streamConnected, this, [this] {
         if (m_browserFallbackActive) {
-            emit streamConnected();
+            markStreamConnected();
         }
     });
     connect(m_bridge, &StreamBridge::fallbackRequested, this, [this](const QString &message) {
         if (m_browserFallbackActive) {
-            emit jpegFallbackRequested(message);
+            scheduleBackgroundRetry(message);
+        }
+    });
+    connect(m_bridge, &StreamBridge::debugReported, this, [this](const QString &message) {
+        if (m_browserFallbackActive) {
+            writeDebug(QStringLiteral("compatibility player: %1").arg(message));
         }
     });
     connect(m_profile->cookieStore(), &QWebEngineCookieStore::cookieAdded, this, &StreamView::cookieAdded);
@@ -895,9 +919,18 @@ void StreamView::resizeEvent(QResizeEvent *event)
     QWidget::resizeEvent(event);
 }
 
-void StreamView::start(const QUrl &serverUrl, const QString &streamName, const QList<QNetworkCookie> &cookies)
+void StreamView::start(
+    const QUrl &serverUrl,
+    const QString &streamName,
+    const QString &snapshotCameraName,
+    const QList<QNetworkCookie> &cookies,
+    LivePlaybackMethod method,
+    int liveRetryTimeoutSeconds,
+    bool debugEnabled
+)
 {
-    if (!serverUrl.isValid() || streamName.trimmed().isEmpty()) {
+    stop();
+    if (!serverUrl.isValid() || streamName.trimmed().isEmpty() || snapshotCameraName.trimmed().isEmpty()) {
         emit errorChanged(QStringLiteral("A valid Frigate stream is not available."));
         return;
     }
@@ -908,12 +941,18 @@ void StreamView::start(const QUrl &serverUrl, const QString &streamName, const Q
     m_pendingHtml.clear();
     m_pendingServerUrl = serverUrl;
     m_pendingStreamName = streamName;
+    m_pendingSnapshotCameraName = snapshotCameraName;
     m_pendingCookies = cookies;
-    m_usingNativePlayer = true;
-    m_browserFallbackActive = false;
-    m_view->setHtml(QStringLiteral("<!doctype html><title>Native live playback</title>"));
-    m_layout->setCurrentWidget(m_artwork);
-    m_nativePlayer->start(serverUrl, streamName, cookies);
+    m_streamActive = true;
+    m_selectedMethod = method;
+    m_liveRetryTimeoutSeconds = qBound(1, liveRetryTimeoutSeconds, 15);
+    m_debugEnabled = debugEnabled;
+    writeDebug(QStringLiteral("session started player=%1 retry-timeout=%2s")
+        .arg(method == LivePlaybackMethod::NativeMse ? QStringLiteral("native-mse")
+            : method == LivePlaybackMethod::ProgressiveMp4 ? QStringLiteral("progressive-mp4")
+            : QStringLiteral("webengine-mse"))
+        .arg(m_liveRetryTimeoutSeconds));
+    startSelectedPlayer();
 }
 
 void StreamView::stop()
@@ -925,22 +964,119 @@ void StreamView::stop()
     m_pendingCookieNames.clear();
     m_pendingHtml.clear();
     m_pendingCookies.clear();
+    m_streamActive = false;
+    m_backgroundRetryTimer.stop();
     m_nativePlayer->stop();
     m_view->setHtml(QStringLiteral("<!doctype html><title>Stopped</title>"));
 }
 
+void StreamView::startSelectedPlayer()
+{
+    if (!m_streamActive) {
+        return;
+    }
+    m_backgroundRetryTimer.stop();
+    m_browserFallbackActive = false;
+    m_nativePlayer->stop();
+    m_view->setHtml(QStringLiteral("<!doctype html><title>Live playback connecting</title>"));
+
+    if (m_selectedMethod == LivePlaybackMethod::BrowserMse) {
+        m_usingNativePlayer = false;
+        updateLiveStatus(QStringLiteral("Qt WebEngine MSE"), QStringLiteral("connecting"));
+        startWebEngineFallback();
+        return;
+    }
+
+    m_usingNativePlayer = true;
+    emit jpegPreviewLocationChanged(false);
+    m_layout->setCurrentWidget(m_nativePlayer->videoWidget());
+    updateLiveStatus(
+        m_selectedMethod == LivePlaybackMethod::ProgressiveMp4
+            ? QStringLiteral("Progressive MP4")
+            : QStringLiteral("Native MSE"),
+        QStringLiteral("connecting")
+    );
+    m_nativePlayer->start(
+        m_pendingServerUrl,
+        m_pendingStreamName,
+        m_pendingCookies,
+        m_selectedMethod,
+        m_liveRetryTimeoutSeconds * 1000
+    );
+}
+
+void StreamView::scheduleBackgroundRetry(const QString &message)
+{
+    if (!m_streamActive) {
+        return;
+    }
+    m_usingNativePlayer = false;
+    m_browserFallbackActive = false;
+    m_nativePlayer->stop();
+    m_view->setHtml(QStringLiteral("<!doctype html><title>Live playback retry pending</title>"));
+    m_layout->setCurrentWidget(m_nativePlayer->videoWidget());
+    emit jpegPreviewLocationChanged(false);
+    updateLiveStatus(QStringLiteral("Live player"), QStringLiteral("retrying in 2 seconds"));
+    writeDebug(QStringLiteral("background retry scheduled reason=%1").arg(message.left(180)));
+    emit errorChanged(message + QStringLiteral(" JPEG snapshots remain visible; retrying live video."));
+    m_backgroundRetryTimer.start(2000);
+}
+
+void StreamView::markStreamConnected()
+{
+    if (!m_streamActive) {
+        return;
+    }
+    m_backgroundRetryTimer.stop();
+    updateLiveStatus(m_liveStatusMethod, QStringLiteral("playing"));
+    writeDebug(QStringLiteral("live video is playing"));
+    emit streamConnected();
+}
+
+void StreamView::updateLiveStatus(const QString &method, const QString &state)
+{
+    if (m_liveStatusMethod == method && m_liveStatusState == state) {
+        return;
+    }
+    m_liveStatusMethod = method;
+    m_liveStatusState = state;
+    emit liveStatusChanged(method, state);
+}
+
+void StreamView::writeDebug(const QString &message) const
+{
+    if (m_debugEnabled) {
+        QString safeMessage = message.left(300);
+        safeMessage.replace(
+            QRegularExpression(QStringLiteral(R"((?:https?|wss?)://[^\s]+)")),
+            QStringLiteral("<url>")
+        );
+        qInfo().noquote() << QStringLiteral("FriedasBirdview live: %1").arg(safeMessage);
+    }
+}
+
 void StreamView::startWebEngineFallback()
 {
+    if (!m_streamActive) {
+        return;
+    }
     if (!m_pendingServerUrl.isValid() || m_pendingStreamName.trimmed().isEmpty()) {
-        emit jpegFallbackRequested(QStringLiteral("A compatible Frigate live stream is not available. Showing JPEG snapshots."));
+        scheduleBackgroundRetry(QStringLiteral("A compatible Frigate live stream is not available."));
         return;
     }
 
     m_nativePlayer->stop();
     m_browserFallbackActive = true;
+    m_page->setLifecycleState(QWebEnginePage::LifecycleState::Active);
+    updateLiveStatus(QStringLiteral("Qt WebEngine MSE"), QStringLiteral("connecting"));
     m_layout->setCurrentWidget(m_view);
     const int loadId = m_loadId;
-    const QString html = streamHtml(m_pendingServerUrl, m_pendingStreamName);
+    const QString html = streamHtml(
+        m_pendingServerUrl,
+        m_pendingStreamName,
+        m_pendingSnapshotCameraName,
+        m_liveRetryTimeoutSeconds
+    );
     m_cookieLoadId = loadId;
     m_pendingCookieNames.clear();
     m_pendingHtml = html;
@@ -967,6 +1103,11 @@ void StreamView::loadHtmlWhenCookiesAreReady(int loadId, const QString &html, co
     }
     m_cookieLoadId = 0;
     m_pendingCookieNames.clear();
+    m_page->setLifecycleState(QWebEnginePage::LifecycleState::Active);
+    // The outer Qt JPEG remains visible until cookies are ready. The page then
+    // takes over with its own JPEG layer before it receives video.play(), so
+    // Chromium sees its MSE video as foreground content.
+    emit jpegPreviewLocationChanged(true);
     m_view->setHtml(html, serverUrl);
 }
 
@@ -980,10 +1121,17 @@ void StreamView::cookieAdded(const QNetworkCookie &cookie)
     }
 }
 
-QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName) const
+QString StreamView::streamHtml(
+    const QUrl &serverUrl,
+    const QString &streamName,
+    const QString &snapshotCameraName,
+    int liveRetryTimeoutSeconds
+) const
 {
     const QString server = javaScriptString(serverUrl.toString(QUrl::FullyEncoded));
-    const QString camera = javaScriptString(streamName);
+    const QString stream = javaScriptString(streamName);
+    const QString snapshotCamera = javaScriptString(snapshotCameraName);
+    const QString firstFrameTimeoutMs = QString::number(qBound(1, liveRetryTimeoutSeconds, 15) * 1000);
     return QStringLiteral(R"HTML(
 <!doctype html>
 <html>
@@ -993,15 +1141,21 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
   <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
   <style>
     html, body { position:fixed; inset:0; width:100%; height:100%; margin:0; background:#050505; overflow:hidden; }
-    video { display:block; position:absolute; inset:0; width:100vw; height:100vh; object-fit:contain; cursor:pointer; }
+    video, #snapshot { display:block; position:absolute; inset:0; width:100vw; height:100vh; object-fit:contain; cursor:pointer; }
+    #snapshot { z-index:1; background:#050505; }
+    video { z-index:0; }
   </style>
 </head>
 <body>
   <video id="feed" autoplay muted playsinline></video>
+  <img id="snapshot" alt="Live camera snapshot">
   <script>
     const server = %1;
-    const camera = %2;
+    const stream = %2;
+    const snapshotCamera = %3;
+    const firstFrameTimeoutMs = %4;
     const video = document.getElementById("feed");
+    const snapshot = document.getElementById("snapshot");
     // go2rtc selects its output from the codecs the client advertises. Keep
     // video and audio separate: an audio-only capability list must never open
     // an MSE feed that can only render a black video surface.
@@ -1029,8 +1183,23 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
     let announcedMimeType = "";
     let renderer = navigator.userAgent.includes("Windows") ? "Windows software renderer" : "system renderer";
 
+    function showSnapshot() {
+      snapshot.style.display = "block";
+    }
+    function hideSnapshot() {
+      snapshot.style.display = "none";
+    }
+    function refreshSnapshot() {
+      if (snapshot.style.display === "none") return;
+      const url = new URL(`/api/${encodeURIComponent(snapshotCamera)}/latest.jpg`, server);
+      url.searchParams.set("t", String(Date.now()));
+      snapshot.src = url.href;
+    }
+
     function report(message) { if (bridge) bridge.reportError(message); }
+    function debug(message) { if (bridge) bridge.reportDebug(message); }
     function fallback(message) {
+      debug(`fallback: ${message}`);
       shouldReconnect = false;
       clearTimeout(firstFrameTimer);
       clearTimeout(restartTimer);
@@ -1066,9 +1235,12 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
     function recover(reason) {
       if (!shouldReconnect || isRecovering) return;
       isRecovering = true;
+      showSnapshot();
+      refreshSnapshot();
       clearTimeout(firstFrameTimer);
       clearTimeout(stablePlaybackTimer);
       recoveryAttempts += 1;
+      debug(`recovery ${recoveryAttempts}: ${reason}`);
       if (recoveryAttempts >= maxRecoveryAttempts) {
         fallback("Live stream failed repeatedly. Showing JPEG snapshots.");
         return;
@@ -1137,6 +1309,7 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
     }
     function start() {
       if (!shouldReconnect) return;
+      debug("starting MSE connection");
       const MediaSourceConstructor = window.ManagedMediaSource || window.MediaSource;
       if (!MediaSourceConstructor) { fallback("This system cannot play Frigate's MSE stream. Showing JPEG snapshots."); return; }
       const supportedVideo = videoCodecs.filter((codec) =>
@@ -1153,7 +1326,7 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
 
       const streamURL = new URL("/live/mse/api/ws", server);
       streamURL.protocol = streamURL.protocol === "https:" ? "wss:" : "ws:";
-      streamURL.searchParams.set("src", camera);
+      streamURL.searchParams.set("src", stream);
       let currentSocket;
       try {
         currentSocket = new WebSocket(streamURL.href);
@@ -1186,7 +1359,7 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
         firstFrameTimer = setTimeout(() => {
           const type = announcedMimeType || "the announced stream codec";
           recover(`Frigate connected but ${renderer} did not decode ${type}.`);
-        }, 6000);
+        }, firstFrameTimeoutMs);
       };
       currentSocket.onmessage = (event) => {
         if (socket !== currentSocket || isRecovering || typeof event.data !== "string") return;
@@ -1197,6 +1370,7 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
         try {
           if (!mediaSource || sourceBuffer) return;
           announcedMimeType = response.value;
+          debug(`announced ${announcedMimeType}`);
           if (!hasVideoCodec(announcedMimeType)) {
             fallback("Frigate returned an audio-only live stream. Showing JPEG snapshots.");
             return;
@@ -1221,6 +1395,8 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
     video.addEventListener("click", () => bridge && bridge.dismiss());
     video.addEventListener("loadeddata", () => {
       clearTimeout(firstFrameTimer);
+      debug("decoded first video frame");
+      hideSnapshot();
       if (bridge) bridge.connected();
       reportAspectRatio();
       lastPlaybackTime = video.currentTime;
@@ -1259,9 +1435,12 @@ QString StreamView::streamHtml(const QUrl &serverUrl, const QString &streamName)
       clearTimeout(stablePlaybackTimer);
       closeSocket();
     });
+    snapshot.addEventListener("click", () => bridge && bridge.dismiss());
+    refreshSnapshot();
+    setInterval(refreshSnapshot, 500);
     new QWebChannel(qt.webChannelTransport, (channel) => { bridge = channel.objects.streamBridge; start(); });
   </script>
 </body>
 </html>
-)HTML").arg(server, camera);
+)HTML").arg(server, stream, snapshotCamera, firstFrameTimeoutMs);
 }

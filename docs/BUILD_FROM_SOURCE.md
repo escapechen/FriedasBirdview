@@ -10,9 +10,11 @@ Install a C++20 compiler, CMake, Qt 6 with Multimedia, Multimedia Widgets,
 WebSockets, WebEngine, and WebChannel support, plus the KF6 Wallet and OpenSSL
 development packages. Install Qt Multimedia's FFmpeg backend (normally
 provided by your distribution's Qt/FFmpeg packages); it is the primary native
-Linux live-video decoder. Install the NSS `certutil` tool for custom-CA support
+Linux live-video decoder for the default MSE relay. Install the NSS `certutil` tool for custom-CA support
 in Qt WebEngine. KDE Wallet must be enabled only if the Frigate server uses a
-username/password login.
+username/password login or the optional MQTT broker uses authentication. MQTT
+uses Qt Network directly, so it does not add another Qt module or package
+dependency.
 
 ## Build and install for your user
 

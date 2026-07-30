@@ -15,6 +15,8 @@
 
 #include "CustomCaStore.h"
 #include "CredentialStore.h"
+#include "LivePlaybackMethod.h"
+#include "MqttClient.h"
 
 class QNetworkAccessManager;
 class QNetworkCookieJar;
@@ -36,6 +38,9 @@ public:
     enum class AlertSound { GentleChime, BrightChime, Bell };
     Q_ENUM(AlertSound)
 
+    enum class EventDeliveryMode { HttpPolling, Mqtt };
+    Q_ENUM(EventDeliveryMode)
+
     enum class ConnectionState { Idle, Connecting, Connected, Failed };
     Q_ENUM(ConnectionState)
 
@@ -52,6 +57,19 @@ public:
     QString username() const;
     int overlayDurationSeconds() const;
     FeedMode feedMode() const;
+    LivePlaybackMethod livePlaybackMethod() const;
+    int liveStartupTimeoutSeconds() const;
+    bool isLiveDebugEnabled() const;
+    bool isFastEventPollingEnabled() const;
+    EventDeliveryMode eventDeliveryMode() const;
+    QString mqttBrokerHost() const;
+    int mqttBrokerPort() const;
+    bool mqttUsesTls() const;
+    QString mqttUsername() const;
+    QString mqttTopicPrefix() const;
+    QString eventDeliveryStatus() const;
+    bool isMqttVerificationInProgress() const;
+    QString mqttVerificationStatus() const;
     PopupTrigger popupTrigger() const;
     bool isPopupCooldownEnabled() const;
     int popupCooldownSeconds() const;
@@ -80,6 +98,11 @@ public:
 
     void setOverlayDurationSeconds(int seconds);
     void setFeedMode(FeedMode mode);
+    void setLivePlaybackMethod(LivePlaybackMethod method);
+    void setLiveStartupTimeoutSeconds(int seconds);
+    void setLiveDebugEnabled(bool enabled);
+    void setFastEventPollingEnabled(bool enabled);
+    void setEventDeliveryMode(EventDeliveryMode mode);
     void setPopupTrigger(PopupTrigger trigger);
     void setPopupCooldownEnabled(bool enabled);
     void setPopupCooldownSeconds(int seconds);
@@ -95,6 +118,10 @@ public:
 
     /// Validates and stores settings. A non-empty password is kept only in the OS credential store.
     bool applyConnectionSettings(const QString &address, const QString &username, const QString &password);
+    /// Stores broker connection details. A non-empty password is kept only in the OS credential store.
+    bool applyMqttSettings(const QString &host, int port, bool useTls, const QString &username,
+        const QString &password, const QString &topicPrefix);
+    void verifyMqttConnection();
 
 public slots:
     void start();
@@ -146,6 +173,11 @@ private:
     void authenticateThenPoll();
     void startPollRequests();
     void finishPollIfComplete();
+    void startMqttDelivery();
+    void stopMqttDelivery();
+    bool mqttConfiguration(MqttClient::Configuration *configuration, QString *error) const;
+    void completeMqttVerification(const QString &status);
+    void handleMqttMessage(const QString &topic, const QByteArray &payload);
     void refreshLiveStreamNamesIfNeeded();
     void setConnectionState(ConnectionState state, const QString &detail = {});
     void showActivity(const Activity &activity);
@@ -165,11 +197,15 @@ private:
     void handleReviewItems(const QList<ReviewItem> &items);
     QList<Event> parseEvents(const QByteArray &data, bool *ok) const;
     QList<ReviewItem> parseReviewItems(const QByteArray &data, bool *ok) const;
+    Event parseEventObject(const QJsonObject &object) const;
+    ReviewItem parseReviewItemObject(const QJsonObject &object) const;
     QStringList parseStringList(const QJsonValue &value) const;
     QString normalizedName(const QString &name) const;
     QString displayName(const QString &name) const;
     QString describeTimestamp(const QDateTime &time) const;
     bool validateServerAddress(const QString &address, QUrl *url, QString *normalized, QString *error) const;
+    bool validateMqttSettings(const QString &host, int port, const QString &topicPrefix,
+        QString *normalizedHost, QString *normalizedTopicPrefix, QString *error) const;
 
     bool updateCredentials(const QString &newUsername, const QString &password, QString *error);
     bool loadPassword(const QString &username, QString *password, QString *error) const;
@@ -177,6 +213,12 @@ private:
     bool savePassword(const QString &username, const QString &password, QString *error) const;
     bool deletePassword(const QString &username, QString *error) const;
     QString credentialKey(const QString &username) const;
+    bool updateMqttCredentials(const QString &host, const QString &username, const QString &password, QString *error);
+    bool loadMqttPassword(QString *password, QString *error) const;
+    bool hasStoredMqttPassword(const QString &host, const QString &username, QString *error) const;
+    bool saveMqttPassword(const QString &host, const QString &username, const QString &password, QString *error) const;
+    bool deleteMqttPassword(const QString &host, const QString &username, QString *error) const;
+    QString mqttCredentialKey(const QString &host, const QString &username) const;
 
     QNetworkAccessManager *m_network = nullptr;
     QNetworkCookieJar *m_cookieJar = nullptr;
@@ -187,12 +229,27 @@ private:
     QTimer m_overlayTimer;
     QAudioSink *m_alertSoundPlayer = nullptr;
     QBuffer *m_alertSoundBuffer = nullptr;
+    MqttClient *m_mqttClient = nullptr;
+    MqttClient *m_mqttVerifier = nullptr;
+    QTimer m_mqttVerificationTimer;
 
     QUrl m_baseUrl;
     QString m_serverAddress;
     QString m_username;
     int m_overlayDurationSeconds = 20;
     FeedMode m_feedMode = FeedMode::Jpeg;
+    LivePlaybackMethod m_livePlaybackMethod = LivePlaybackMethod::NativeMse;
+    int m_liveStartupTimeoutSeconds = 5;
+    bool m_liveDebugEnabled = false;
+    bool m_fastEventPollingEnabled = false;
+    EventDeliveryMode m_eventDeliveryMode = EventDeliveryMode::HttpPolling;
+    QString m_mqttBrokerHost;
+    int m_mqttBrokerPort = 8883;
+    bool m_mqttUseTls = true;
+    QString m_mqttUsername;
+    QString m_mqttTopicPrefix = QStringLiteral("frigate");
+    bool m_mqttVerificationInProgress = false;
+    QString m_mqttVerificationStatus;
     PopupTrigger m_popupTrigger = PopupTrigger::SelectedClassifications;
     bool m_popupCooldownEnabled = false;
     int m_popupCooldownSeconds = 30;

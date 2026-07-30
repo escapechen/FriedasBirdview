@@ -15,12 +15,13 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
-#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSlider>
 #include <QSpinBox>
 #include <QStandardPaths>
+#include <QSettings>
+#include <QTabWidget>
 #include <QVBoxLayout>
 
 namespace {
@@ -57,26 +58,29 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
 {
     setWindowTitle(QStringLiteral("FriedasBirdview Settings"));
     setModal(false);
-    setMinimumWidth(500);
-    resize(540, 740);
+    setMinimumSize(560, 500);
+    resize(660, 650);
 
     auto *dialogLayout = new QVBoxLayout(this);
     dialogLayout->setContentsMargins(6, 4, 6, 4);
     dialogLayout->setSpacing(4);
-    auto *scrollArea = new QScrollArea(this);
-    scrollArea->setWidgetResizable(true);
-    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    scrollArea->setFrameShape(QFrame::NoFrame);
-    auto *content = new QWidget(scrollArea);
-    content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
-    auto *layout = new QVBoxLayout(content);
-    layout->setContentsMargins(6, 4, 6, 4);
-    layout->setSpacing(4);
-    layout->setAlignment(Qt::AlignTop);
-    // The settings form is taller than a short Plasma window once it contains
-    // several classifications.  Preserve its minimum geometry and scroll the
-    // form rather than allowing a child widget to overflow a later control.
-    layout->setSizeConstraint(QLayout::SetMinimumSize);
+    m_tabs = new QTabWidget(this);
+    dialogLayout->addWidget(m_tabs, 1);
+    const auto addTab = [this](const QString &title) {
+        auto *tab = new QWidget(m_tabs);
+        auto *tabLayout = new QVBoxLayout(tab);
+        tabLayout->setContentsMargins(6, 6, 6, 6);
+        tabLayout->setSpacing(4);
+        tabLayout->setAlignment(Qt::AlignTop);
+        m_tabs->addTab(tab, title);
+        return tabLayout;
+    };
+    auto *generalLayout = addTab(QStringLiteral("General"));
+    auto *feedAlertsLayout = addTab(QStringLiteral("Feed && alerts"));
+    auto *triggersLayout = addTab(QStringLiteral("Triggers"));
+    auto *securityLayout = addTab(QStringLiteral("Security"));
+    auto *deliveryLayout = addTab(QStringLiteral("Event delivery"));
+    QVBoxLayout *layout = generalLayout;
 
     const auto compactGroup = [](QGroupBox *group) {
         group->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
@@ -120,6 +124,9 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     connectionLayout->addRow(QStringLiteral("Password:"), m_password);
     layout->addWidget(connectionGroup);
 
+    generalLayout->addStretch();
+    layout = securityLayout;
+
     auto *certificateGroup = new QGroupBox(QStringLiteral("Custom certificate authorities"), this);
     compactGroup(certificateGroup);
     certificateGroup->setToolTip(customCaToolTip());
@@ -128,7 +135,7 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     certificateLayout->setSpacing(2);
     m_customCaCertificates = new QListWidget(certificateGroup);
     m_customCaCertificates->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    m_customCaCertificates->setFixedHeight(56);
+    m_customCaCertificates->setFixedHeight(96);
     m_customCaCertificates->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     certificateLayout->addWidget(m_customCaCertificates);
     auto *certificateControls = new QHBoxLayout;
@@ -146,6 +153,9 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     certificateLayout->addWidget(m_customCaHint);
     layout->addWidget(certificateGroup);
 
+    securityLayout->addStretch();
+    layout = feedAlertsLayout;
+
     auto *feedGroup = new QGroupBox(QStringLiteral("Feed"), this);
     compactGroup(feedGroup);
     auto *feedLayout = new QFormLayout(feedGroup);
@@ -160,6 +170,39 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     m_feedMode->addItem(QStringLiteral("JPEG snapshots — one image every 0.5 seconds"), static_cast<int>(FrigateMonitor::FeedMode::Jpeg));
     m_feedMode->addItem(QStringLiteral("Live stream — low-latency go2rtc MSE video"), static_cast<int>(FrigateMonitor::FeedMode::LiveStream));
     feedLayout->addRow(QStringLiteral("Mode:"), m_feedMode);
+#if defined(Q_OS_LINUX)
+    m_livePlaybackMethod = new QComboBox(feedGroup);
+    m_livePlaybackMethod->addItem(
+        QStringLiteral("Native MSE — recommended, lower latency"),
+        static_cast<int>(LivePlaybackMethod::NativeMse)
+    );
+    m_livePlaybackMethod->addItem(
+        QStringLiteral("FFmpeg progressive MP4 — experimental"),
+        static_cast<int>(LivePlaybackMethod::ProgressiveMp4)
+    );
+    m_livePlaybackMethod->addItem(
+        QStringLiteral("Qt WebEngine MSE — compatibility"),
+        static_cast<int>(LivePlaybackMethod::BrowserMse)
+    );
+    m_livePlaybackMethod->setToolTip(QStringLiteral(
+        "Native MSE is the normal low-latency Linux player. Progressive MP4 is useful only for rare compatibility cases and is usually slower. All live methods fall back safely to JPEG snapshots if playback fails."
+    ));
+    feedLayout->addRow(QStringLiteral("Live player:"), m_livePlaybackMethod);
+#endif
+    m_liveStartupTimeout = new QSpinBox(feedGroup);
+    m_liveStartupTimeout->setRange(1, 15);
+    m_liveStartupTimeout->setSuffix(QStringLiteral(" seconds"));
+    m_liveStartupTimeout->setToolTip(QStringLiteral(
+        "JPEG snapshots remain visible while live video retries in the background. This is how long the active "
+        "live player gets to produce a stable frame before FriedasBirdview tries its next compatible player."
+    ));
+    feedLayout->addRow(QStringLiteral("Try next live player after:"), m_liveStartupTimeout);
+    m_liveDebugEnabled = new QCheckBox(QStringLiteral("Write live-player diagnostics to terminal output"), feedGroup);
+    m_liveDebugEnabled->setToolTip(QStringLiteral(
+        "Writes concise live-player state transitions to the terminal where FriedasBirdview was started. "
+        "It deliberately excludes server addresses, camera names, credentials, cookies, and tokens."
+    ));
+    feedLayout->addRow(m_liveDebugEnabled);
     layout->addWidget(feedGroup);
 
     auto *soundGroup = new QGroupBox(QStringLiteral("Sound alerts"), this);
@@ -206,8 +249,11 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     soundLayout->addRow(QStringLiteral("Sound cooldown:"), soundCooldownControls);
     layout->addWidget(soundGroup);
 
+    feedAlertsLayout->addStretch();
+    layout = triggersLayout;
+
     auto *popupGroup = new QGroupBox(QStringLiteral("Popup triggers"), this);
-    compactGroup(popupGroup);
+    popupGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *popupLayout = new QVBoxLayout(popupGroup);
     popupLayout->setContentsMargins(6, 2, 6, 6);
     popupLayout->setSpacing(2);
@@ -233,6 +279,7 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     popupLayout->addLayout(triggerForm);
 
     m_classificationSection = new QWidget(popupGroup);
+    m_classificationSection->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *classificationLayout = new QVBoxLayout(m_classificationSection);
     classificationLayout->setContentsMargins(0, 0, 0, 0);
     auto *classificationHeader = new QHBoxLayout;
@@ -242,11 +289,10 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     classificationHeader->addWidget(m_refreshClassifications);
     classificationLayout->addLayout(classificationHeader);
     m_classifications = new QListWidget(m_classificationSection);
-    // Keep the controls below the list visible.  QListWidget has an expanding
-    // vertical size policy by default, which let it consume the popup group's
-    // spare height and visually cover the add row on Plasma.
-    m_classifications->setFixedHeight(96);
-    m_classifications->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    // Let the list use the empty tab space, while giving it a minimum that
+    // still leaves the add row visible in a smaller Settings window.
+    m_classifications->setMinimumHeight(96);
+    m_classifications->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     m_classifications->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_classifications->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     classificationLayout->addWidget(m_classifications);
@@ -261,12 +307,124 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     m_classificationHint->setWordWrap(true);
     m_classificationHint->setStyleSheet(QStringLiteral("color: palette(mid);"));
     classificationLayout->addWidget(m_classificationHint);
-    popupLayout->addWidget(m_classificationSection);
-    layout->addWidget(popupGroup);
+    popupLayout->addWidget(m_classificationSection, 1);
+    layout->addWidget(popupGroup, 1);
+
+    auto *deliveryGroup = new QGroupBox(QStringLiteral("Activity delivery"), this);
+    compactGroup(deliveryGroup);
+    auto *deliveryGroupLayout = new QVBoxLayout(deliveryGroup);
+    deliveryGroupLayout->setContentsMargins(6, 2, 6, 6);
+    deliveryGroupLayout->setSpacing(4);
+    auto *deliveryForm = new QFormLayout;
+    deliveryForm->setVerticalSpacing(2);
+    m_eventDeliveryMode = new QComboBox(deliveryGroup);
+    m_eventDeliveryMode->addItem(
+        QStringLiteral("HTTP polling — compatible default"),
+        static_cast<int>(FrigateMonitor::EventDeliveryMode::HttpPolling)
+    );
+    m_eventDeliveryMode->addItem(
+        QStringLiteral("MQTT — lower-latency event delivery"),
+        static_cast<int>(FrigateMonitor::EventDeliveryMode::Mqtt)
+    );
+    m_eventDeliveryMode->setToolTip(QStringLiteral(
+        "MQTT receives Frigate event updates from your broker instead of waiting for the next HTTP poll. "
+        "It does not change Frigate's own detection or camera-stream startup time."
+    ));
+    deliveryForm->addRow(QStringLiteral("Method:"), m_eventDeliveryMode);
+    deliveryGroupLayout->addLayout(deliveryForm);
+
+    m_httpPollingSection = new QWidget(deliveryGroup);
+    auto *httpPollingLayout = new QVBoxLayout(m_httpPollingSection);
+    httpPollingLayout->setContentsMargins(0, 0, 0, 0);
+    httpPollingLayout->setSpacing(2);
+    m_fastEventPollingEnabled = new QCheckBox(
+        QStringLiteral("Fast event detection — check Frigate every second"),
+        m_httpPollingSection
+    );
+    m_fastEventPollingEnabled->setToolTip(QStringLiteral(
+        "Reduces the event-detection delay by up to one second, but doubles the app's event and review API polling. "
+        "It does not change Frigate's own detection time."
+    ));
+    httpPollingLayout->addWidget(m_fastEventPollingEnabled);
+    auto *httpHint = new QLabel(
+        QStringLiteral("HTTP polling requires no broker configuration and remains the compatible default."),
+        m_httpPollingSection
+    );
+    httpHint->setWordWrap(true);
+    httpHint->setStyleSheet(QStringLiteral("color: palette(mid);"));
+    httpPollingLayout->addWidget(httpHint);
+    deliveryGroupLayout->addWidget(m_httpPollingSection);
+
+    m_mqttSettingsSection = new QWidget(deliveryGroup);
+    auto *mqttLayout = new QFormLayout(m_mqttSettingsSection);
+    mqttLayout->setContentsMargins(0, 0, 0, 0);
+    mqttLayout->setVerticalSpacing(2);
+    m_mqttBrokerHost = new QLineEdit(m_mqttSettingsSection);
+    m_mqttBrokerHost->setPlaceholderText(QStringLiteral("mqtt.example.net"));
+    m_mqttBrokerHost->setToolTip(QStringLiteral("Host name or IP address only; choose the port separately."));
+    mqttLayout->addRow(QStringLiteral("Broker host:"), m_mqttBrokerHost);
+    m_mqttBrokerPort = new QSpinBox(m_mqttSettingsSection);
+    m_mqttBrokerPort->setRange(1, 65535);
+    m_mqttBrokerPort->setValue(8883);
+    m_mqttBrokerPort->setToolTip(QStringLiteral("8883 is the usual TLS MQTT port; 1883 is commonly used without TLS."));
+    mqttLayout->addRow(QStringLiteral("Port:"), m_mqttBrokerPort);
+    m_mqttUseTls = new QCheckBox(QStringLiteral("Use TLS certificate validation"), m_mqttSettingsSection);
+    m_mqttUseTls->setToolTip(QStringLiteral(
+        "Keeps normal certificate host-name, expiry, and chain validation. Custom CAs from the Security tab also apply."
+    ));
+    mqttLayout->addRow(m_mqttUseTls);
+    m_mqttUsername = new QLineEdit(m_mqttSettingsSection);
+    m_mqttUsername->setPlaceholderText(QStringLiteral("Username (optional)"));
+    mqttLayout->addRow(QStringLiteral("Username:"), m_mqttUsername);
+    m_mqttPassword = new QLineEdit(m_mqttSettingsSection);
+    m_mqttPassword->setEchoMode(QLineEdit::Password);
+    m_mqttPassword->setPlaceholderText(QStringLiteral("Password (leave blank to keep the saved password)"));
+    m_mqttPassword->setToolTip(QStringLiteral(
+        "The MQTT password is stored only in KDE Wallet or Windows Credential Manager, never in the app settings."
+    ));
+    mqttLayout->addRow(QStringLiteral("Password:"), m_mqttPassword);
+    m_mqttTopicPrefix = new QLineEdit(m_mqttSettingsSection);
+    m_mqttTopicPrefix->setPlaceholderText(QStringLiteral("frigate"));
+    m_mqttTopicPrefix->setToolTip(QStringLiteral(
+        "The Frigate MQTT topic prefix. FriedasBirdview subscribes only to its events and reviews topics."
+    ));
+    mqttLayout->addRow(QStringLiteral("Topic prefix:"), m_mqttTopicPrefix);
+    auto *mqttControls = new QHBoxLayout;
+    m_applyMqttSettings = new QPushButton(QStringLiteral("Apply MQTT settings"), m_mqttSettingsSection);
+    mqttControls->addWidget(m_applyMqttSettings);
+    m_verifyMqttConnection = new QPushButton(QStringLiteral("Test connection"), m_mqttSettingsSection);
+    m_verifyMqttConnection->setToolTip(QStringLiteral(
+        "Verifies the saved MQTT connection, TLS validation, credentials, and subscriptions to the Frigate events and reviews topics."
+    ));
+    mqttControls->addWidget(m_verifyMqttConnection);
+    mqttControls->addStretch();
+    mqttLayout->addRow(QString(), mqttControls);
+    m_mqttVerificationStatus = new QLabel(m_mqttSettingsSection);
+    m_mqttVerificationStatus->setWordWrap(true);
+    m_mqttVerificationStatus->setVisible(false);
+    mqttLayout->addRow(QString(), m_mqttVerificationStatus);
+    deliveryGroupLayout->addWidget(m_mqttSettingsSection);
+
+    m_eventDeliveryStatus = new QLabel(deliveryGroup);
+    m_eventDeliveryStatus->setWordWrap(true);
+    m_eventDeliveryStatus->setStyleSheet(QStringLiteral("color: palette(mid);"));
+    deliveryGroupLayout->addWidget(m_eventDeliveryStatus);
+    deliveryLayout->addWidget(deliveryGroup);
+    auto *deliveryHint = new QLabel(
+        QStringLiteral(
+            "MQTT needs a broker configured by Frigate. Use a separate, read-only broker account where possible. "
+            "Leaving MQTT disabled keeps the existing HTTP behavior."
+        ),
+        this
+    );
+    deliveryHint->setWordWrap(true);
+    deliveryHint->setStyleSheet(QStringLiteral("color: palette(mid);"));
+    deliveryLayout->addWidget(deliveryHint);
+    deliveryLayout->addStretch();
 
     m_status = new QLabel(this);
     m_status->setWordWrap(true);
-    layout->addWidget(m_status);
+    dialogLayout->addWidget(m_status);
 
     auto *controls = new QHBoxLayout;
     m_monitorButton = new QPushButton(this);
@@ -276,10 +434,7 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     controls->addWidget(showFeedButton);
     controls->addStretch();
     controls->addWidget(closeButton);
-    layout->addLayout(controls);
-
-    scrollArea->setWidget(content);
-    dialogLayout->addWidget(scrollArea);
+    dialogLayout->addLayout(controls);
 
     connect(applyButton, &QPushButton::clicked, this, &SettingsDialog::applySettings);
     connect(m_serverAddress, &QLineEdit::returnPressed, this, &SettingsDialog::applySettings);
@@ -292,6 +447,23 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     connect(m_feedMode, &QComboBox::currentIndexChanged, this, [this](int index) {
         m_monitor->setFeedMode(static_cast<FrigateMonitor::FeedMode>(m_feedMode->itemData(index).toInt()));
     });
+    if (m_livePlaybackMethod) {
+        connect(m_livePlaybackMethod, &QComboBox::currentIndexChanged, this, [this](int index) {
+            m_monitor->setLivePlaybackMethod(static_cast<LivePlaybackMethod>(m_livePlaybackMethod->itemData(index).toInt()));
+        });
+    }
+    connect(m_liveStartupTimeout, &QSpinBox::valueChanged, m_monitor, &FrigateMonitor::setLiveStartupTimeoutSeconds);
+    connect(m_liveDebugEnabled, &QCheckBox::toggled, m_monitor, &FrigateMonitor::setLiveDebugEnabled);
+    connect(m_fastEventPollingEnabled, &QCheckBox::toggled, m_monitor, &FrigateMonitor::setFastEventPollingEnabled);
+    connect(m_eventDeliveryMode, &QComboBox::currentIndexChanged, this, [this](int index) {
+        m_monitor->setEventDeliveryMode(static_cast<FrigateMonitor::EventDeliveryMode>(
+            m_eventDeliveryMode->itemData(index).toInt()
+        ));
+    });
+    connect(m_applyMqttSettings, &QPushButton::clicked, this, &SettingsDialog::applyMqttSettings);
+    connect(m_verifyMqttConnection, &QPushButton::clicked, m_monitor, &FrigateMonitor::verifyMqttConnection);
+    connect(m_mqttBrokerHost, &QLineEdit::returnPressed, this, &SettingsDialog::applyMqttSettings);
+    connect(m_mqttPassword, &QLineEdit::returnPressed, this, &SettingsDialog::applyMqttSettings);
     connect(m_soundAlertEnabled, &QCheckBox::toggled, m_monitor, &FrigateMonitor::setSoundAlertEnabled);
     connect(m_alertSound, &QComboBox::currentIndexChanged, this, [this](int index) {
         m_monitor->setAlertSound(static_cast<FrigateMonitor::AlertSound>(m_alertSound->itemData(index).toInt()));
@@ -323,6 +495,15 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     connect(m_monitor, &FrigateMonitor::classificationsChanged, this, &SettingsDialog::refreshClassificationList);
     connect(m_monitor, &FrigateMonitor::customCaCertificatesChanged, this, &SettingsDialog::refreshCustomCaList);
 
+    const QSettings settings;
+    const int savedTab = settings.value("ui/settingsTab", 0).toInt();
+    if (savedTab >= 0 && savedTab < m_tabs->count()) {
+        m_tabs->setCurrentIndex(savedTab);
+    }
+    connect(m_tabs, &QTabWidget::currentChanged, this, [](int index) {
+        QSettings().setValue("ui/settingsTab", index);
+    });
+
     synchronize();
     refreshClassificationList();
     refreshCustomCaList();
@@ -345,9 +526,24 @@ void SettingsDialog::synchronize()
     if (!m_username->hasFocus()) {
         m_username->setText(m_monitor->username());
     }
+    if (!m_mqttBrokerHost->hasFocus()) {
+        m_mqttBrokerHost->setText(m_monitor->mqttBrokerHost());
+    }
+    if (!m_mqttUsername->hasFocus()) {
+        m_mqttUsername->setText(m_monitor->mqttUsername());
+    }
+    if (!m_mqttTopicPrefix->hasFocus()) {
+        m_mqttTopicPrefix->setText(m_monitor->mqttTopicPrefix());
+    }
     {
         const QSignalBlocker blockDuration(m_duration);
         const QSignalBlocker blockFeed(m_feedMode);
+        const QSignalBlocker blockLiveStartupTimeout(m_liveStartupTimeout);
+        const QSignalBlocker blockLiveDebug(m_liveDebugEnabled);
+        const QSignalBlocker blockFastEventPolling(m_fastEventPollingEnabled);
+        const QSignalBlocker blockEventDeliveryMode(m_eventDeliveryMode);
+        const QSignalBlocker blockMqttPort(m_mqttBrokerPort);
+        const QSignalBlocker blockMqttTls(m_mqttUseTls);
         const QSignalBlocker blockTrigger(m_popupTrigger);
         const QSignalBlocker blockSoundEnabled(m_soundAlertEnabled);
         const QSignalBlocker blockAlertSound(m_alertSound);
@@ -358,6 +554,14 @@ void SettingsDialog::synchronize()
         const QSignalBlocker blockPopupCooldownSeconds(m_popupCooldownSeconds);
         m_duration->setValue(m_monitor->overlayDurationSeconds());
         m_feedMode->setCurrentIndex(m_feedMode->findData(static_cast<int>(m_monitor->feedMode())));
+        m_liveStartupTimeout->setValue(m_monitor->liveStartupTimeoutSeconds());
+        m_liveDebugEnabled->setChecked(m_monitor->isLiveDebugEnabled());
+        m_fastEventPollingEnabled->setChecked(m_monitor->isFastEventPollingEnabled());
+        m_eventDeliveryMode->setCurrentIndex(
+            m_eventDeliveryMode->findData(static_cast<int>(m_monitor->eventDeliveryMode()))
+        );
+        m_mqttBrokerPort->setValue(m_monitor->mqttBrokerPort());
+        m_mqttUseTls->setChecked(m_monitor->mqttUsesTls());
         m_popupTrigger->setCurrentIndex(m_popupTrigger->findData(static_cast<int>(m_monitor->popupTrigger())));
         m_soundAlertEnabled->setChecked(m_monitor->isSoundAlertEnabled());
         m_alertSound->setCurrentIndex(m_alertSound->findData(static_cast<int>(m_monitor->alertSound())));
@@ -367,9 +571,19 @@ void SettingsDialog::synchronize()
         m_popupCooldownEnabled->setChecked(m_monitor->isPopupCooldownEnabled());
         m_popupCooldownSeconds->setValue(m_monitor->popupCooldownSeconds());
     }
+    if (m_livePlaybackMethod) {
+        const QSignalBlocker blockLivePlayback(m_livePlaybackMethod);
+        m_livePlaybackMethod->setCurrentIndex(
+            m_livePlaybackMethod->findData(static_cast<int>(m_monitor->livePlaybackMethod()))
+        );
+        m_livePlaybackMethod->setEnabled(m_monitor->feedMode() == FrigateMonitor::FeedMode::LiveStream);
+    }
+    m_liveStartupTimeout->setEnabled(m_monitor->feedMode() == FrigateMonitor::FeedMode::LiveStream);
+    m_liveDebugEnabled->setEnabled(m_monitor->feedMode() == FrigateMonitor::FeedMode::LiveStream);
     updateAutostartControls();
     updateSoundAlertControls();
     updateCooldownControls();
+    updateEventDeliveryControls();
     m_classificationSection->setVisible(m_monitor->popupTrigger() == FrigateMonitor::PopupTrigger::SelectedClassifications);
     m_monitorButton->setText(m_monitor->isMonitoring() ? QStringLiteral("Pause Monitoring") : QStringLiteral("Start Monitoring"));
     m_status->setText(QStringLiteral("Status: %1\nLast: %2").arg(m_monitor->connectionStateTitle(), m_monitor->lastEventDescription()));
@@ -460,6 +674,25 @@ void SettingsDialog::updateCooldownControls()
     m_popupCooldownSeconds->setEnabled(m_popupCooldownEnabled->isChecked());
 }
 
+void SettingsDialog::updateEventDeliveryControls()
+{
+    const bool mqttEnabled = m_eventDeliveryMode->currentData().toInt()
+        == static_cast<int>(FrigateMonitor::EventDeliveryMode::Mqtt);
+    m_httpPollingSection->setVisible(!mqttEnabled);
+    m_mqttSettingsSection->setVisible(mqttEnabled);
+    const QString status = m_monitor->eventDeliveryStatus();
+    m_eventDeliveryStatus->setText(status.isEmpty()
+        ? QStringLiteral("Configure an MQTT broker, then apply these settings.")
+        : status);
+    const QString verification = m_monitor->mqttVerificationStatus();
+    m_mqttVerificationStatus->setText(verification);
+    m_mqttVerificationStatus->setVisible(!verification.isEmpty());
+    m_verifyMqttConnection->setEnabled(!m_monitor->isMqttVerificationInProgress());
+    m_verifyMqttConnection->setText(m_monitor->isMqttVerificationInProgress()
+        ? QStringLiteral("Testing MQTT…")
+        : QStringLiteral("Test connection"));
+}
+
 void SettingsDialog::refreshClassificationList()
 {
     const QSignalBlocker blocker(m_classifications);
@@ -500,6 +733,20 @@ void SettingsDialog::applySettings()
         m_password->clear();
         synchronize();
         m_monitor->refreshAvailableClassifications();
+    }
+}
+
+void SettingsDialog::applyMqttSettings()
+{
+    if (m_monitor->applyMqttSettings(
+            m_mqttBrokerHost->text(),
+            m_mqttBrokerPort->value(),
+            m_mqttUseTls->isChecked(),
+            m_mqttUsername->text(),
+            m_mqttPassword->text(),
+            m_mqttTopicPrefix->text())) {
+        m_mqttPassword->clear();
+        synchronize();
     }
 }
 

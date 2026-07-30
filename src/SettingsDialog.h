@@ -14,6 +14,7 @@ class QPushButton;
 class QSpinBox;
 class QSlider;
 class QWidget;
+class QTabWidget;
 
 class SettingsDialog final : public QDialog {
     Q_OBJECT
@@ -29,11 +30,13 @@ private:
     void refreshCustomCaList();
     void updateSoundAlertControls();
     void updateCooldownControls();
+    void updateEventDeliveryControls();
     void updateAutostartControls();
     void setAutostartEnabled(bool enabled);
     void handleAutostartChangeFinished(bool enabled, const QString &error);
     QString autostartPortalParentWindowId() const;
     void applySettings();
+    void applyMqttSettings();
     void addClassification();
     void addCustomCaCertificates();
     void removeCustomCaCertificates();
@@ -47,6 +50,24 @@ private:
     QLabel *m_autostartHint = nullptr;
     QSpinBox *m_duration = nullptr;
     QComboBox *m_feedMode = nullptr;
+    QComboBox *m_livePlaybackMethod = nullptr;
+    QSpinBox *m_liveStartupTimeout = nullptr;
+    QCheckBox *m_liveDebugEnabled = nullptr;
+    QCheckBox *m_fastEventPollingEnabled = nullptr;
+    QTabWidget *m_tabs = nullptr;
+    QComboBox *m_eventDeliveryMode = nullptr;
+    QWidget *m_httpPollingSection = nullptr;
+    QWidget *m_mqttSettingsSection = nullptr;
+    QLineEdit *m_mqttBrokerHost = nullptr;
+    QSpinBox *m_mqttBrokerPort = nullptr;
+    QCheckBox *m_mqttUseTls = nullptr;
+    QLineEdit *m_mqttUsername = nullptr;
+    QLineEdit *m_mqttPassword = nullptr;
+    QLineEdit *m_mqttTopicPrefix = nullptr;
+    QPushButton *m_applyMqttSettings = nullptr;
+    QPushButton *m_verifyMqttConnection = nullptr;
+    QLabel *m_mqttVerificationStatus = nullptr;
+    QLabel *m_eventDeliveryStatus = nullptr;
     QCheckBox *m_soundAlertEnabled = nullptr;
     QComboBox *m_alertSound = nullptr;
     QSlider *m_soundAlertVolume = nullptr;

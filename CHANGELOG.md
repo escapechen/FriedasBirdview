@@ -6,6 +6,41 @@ versioning when releases are tagged.
 
 ## [Unreleased]
 
+## [1.10.0]
+
+### Added
+
+- Linux Settings now offers native MSE, progressive MP4, and Qt WebEngine MSE
+  live-player choices, each retaining a safe JPEG fallback.
+- Added an optional fast event-detection mode that polls Frigate every second
+  for doorbell-like use cases.
+- Added MQTT 3.1.1 event delivery for Frigate's event and review topics, with
+  normal TLS validation, custom-CA support, bounded packet handling, automatic
+  reconnects, and broker passwords stored only in the OS credential store.
+- Reworked Settings into compact native Qt tabs for General, Feed & alerts,
+  Triggers, Security, and Event delivery; the last selected tab is remembered.
+- The MQTT tab now has a connection test that verifies TLS, broker credentials,
+  and both Frigate topic subscriptions without interrupting monitoring.
+- Live feeds now load JPEG snapshots while video establishes or retries,
+  replacing them only after a decoded frame arrives. The new **Try next live
+  player after** setting (1–15 seconds, default 5) controls each live-player
+  attempt instead of permanently falling back after one timeout.
+- Overlay badges now state the visible feed and active live-player status.
+  Optional, privacy-safe live-player diagnostics are written to terminal
+  output only when enabled.
+
+### Changed
+
+- The classification selector now expands to use the spare height of the
+  Triggers tab while keeping its add control visible.
+
+### Changed
+
+- Native MSE is now the default Linux live-player path. It avoids the failed
+  progressive-MP4 attempt and its delay on affected Qt/FFmpeg combinations.
+- Qt 6.10 and newer request the FFmpeg backend's supported low-latency
+  streaming playback intent.
+
 ## [1.9.0]
 
 ### Added
@@ -169,3 +204,4 @@ versioning when releases are tagged.
 [1.7.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.7.0
 [1.8.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.8.0
 [1.9.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.9.0
+[1.10.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.10.0

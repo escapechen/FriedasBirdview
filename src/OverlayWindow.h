@@ -35,6 +35,11 @@ private:
     void updateActivity(const FrigateMonitor::Activity &activity);
     void configureFeed(bool force = false);
     void activateJpegFallback(const QString &message);
+    void showSnapshotWhileLiveStarts();
+    void showWebEngineJpegPreview();
+    void showLiveStream();
+    void updateLiveStatus(const QString &method, const QString &state);
+    void updateStreamBadges();
     void updateSnapshotPixmap();
     void applyAspectRatio(double aspectRatio);
     void toggleZoom();
@@ -42,6 +47,8 @@ private:
     FrigateMonitor *m_monitor = nullptr;
     QLabel *m_activityLabel = nullptr;
     QLabel *m_detailLabel = nullptr;
+    QLabel *m_displayBadge = nullptr;
+    QLabel *m_liveBadge = nullptr;
     QLabel *m_snapshotLabel = nullptr;
     QLabel *m_errorLabel = nullptr;
     QLabel *m_countdownLabel = nullptr;
@@ -58,6 +65,10 @@ private:
     double m_aspectRatio = 16.0 / 9.0;
     bool m_hasAppliedAspectRatio = false;
     bool m_usingJpegFallback = false;
+    bool m_waitingForLiveStream = false;
+    bool m_webEngineOwnsPreview = false;
+    QString m_liveMethod = QStringLiteral("Live player");
+    QString m_liveState = QStringLiteral("idle");
     int m_collapsedWidth = 480;
     bool m_expanded = false;
     bool m_geometryRestored = false;
