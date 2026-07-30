@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QTimer>
 
 #include "AutostartManager.h"
 #include "FrigateMonitor.h"
@@ -36,6 +37,8 @@ private:
     QAction *m_lastEventAction = nullptr;
     QAction *m_monitoringAction = nullptr;
     QHash<int, QAction *> m_durationActions;
+    QTimer m_connectionLossTimer;
     FrigateMonitor::ConnectionState m_lastConnectionState = FrigateMonitor::ConnectionState::Idle;
     bool m_initialConnectionEstablished = false;
+    bool m_connectionLossNotificationShown = false;
 };

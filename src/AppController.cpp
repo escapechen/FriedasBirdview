@@ -20,6 +20,8 @@
 #include <QVBoxLayout>
 
 namespace {
+constexpr int kConnectionNotificationGraceMs = 10000;
+
 QIcon normalIcon()
 {
     return QIcon(QStringLiteral(":/resources/icons/friedasbirdview.png"));
@@ -38,6 +40,25 @@ AppController::AppController(QObject *parent)
     m_overlay->setMonitor(&m_monitor);
     m_tray->setToolTip(QStringLiteral("FriedasBirdview"));
     m_tray->setContextMenu(m_menu);
+
+    // A short broker reconnect is common when a laptop wakes or a network
+    // briefly roams. Keep the tray state accurate immediately, but wait
+    // before creating a desktop notification (which plays a sound on Windows).
+    m_connectionLossTimer.setSingleShot(true);
+    connect(&m_connectionLossTimer, &QTimer::timeout, this, [this] {
+        if (!m_initialConnectionEstablished
+            || m_lastConnectionState != FrigateMonitor::ConnectionState::Failed) {
+            return;
+        }
+
+        m_connectionLossNotificationShown = true;
+        m_tray->showMessage(
+            QStringLiteral("FriedasBirdview: connection lost"),
+            m_monitor.connectionStateTitle(),
+            QSystemTrayIcon::Critical,
+            4000
+        );
+    });
 
     connect(&m_monitor, &FrigateMonitor::overlayVisibilityChanged, this, [this](bool visible) {
         visible ? m_overlay->present() : m_overlay->hide();
@@ -145,19 +166,23 @@ void AppController::updateTray(FrigateMonitor::ConnectionState state)
     }
 
     if (state == FrigateMonitor::ConnectionState::Failed && !wasFailed) {
-        m_tray->showMessage(
-            QStringLiteral("FriedasBirdview: connection lost"),
-            m_monitor.connectionStateTitle(),
-            QSystemTrayIcon::Critical,
-            4000
-        );
-    } else if (wasFailed && state == FrigateMonitor::ConnectionState::Connected) {
-        m_tray->showMessage(
-            QStringLiteral("FriedasBirdview: connection restored"),
-            QStringLiteral("Frigate is available again."),
-            QSystemTrayIcon::Information,
-            4000
-        );
+        m_connectionLossNotificationShown = false;
+        m_connectionLossTimer.start(kConnectionNotificationGraceMs);
+    } else if (state == FrigateMonitor::ConnectionState::Connected) {
+        m_connectionLossTimer.stop();
+        const bool notifyRestored = m_connectionLossNotificationShown;
+        m_connectionLossNotificationShown = false;
+        if (notifyRestored) {
+            m_tray->showMessage(
+                QStringLiteral("FriedasBirdview: connection restored"),
+                QStringLiteral("Frigate is available again."),
+                QSystemTrayIcon::Information,
+                4000
+            );
+        }
+    } else if (state == FrigateMonitor::ConnectionState::Idle) {
+        m_connectionLossTimer.stop();
+        m_connectionLossNotificationShown = false;
     }
     m_lastConnectionState = state;
 }

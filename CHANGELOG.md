@@ -27,6 +27,10 @@ versioning when releases are tagged.
 - Suppressed misleading connection-lost/restored desktop notifications during
   the initial MQTT connection handshake. Real outages after the first
   successful connection still notify normally.
+- Debounced transient MQTT reconnect notifications after startup: the tray
+  state changes immediately, while a desktop notification is shown only after
+  ten seconds of continuous loss. This prevents Windows notification sounds
+  for short reconnects.
 
 ## [1.10.0]
 
