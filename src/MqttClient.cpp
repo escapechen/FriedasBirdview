@@ -13,6 +13,30 @@ constexpr qsizetype kMaximumPacketSize = qsizetype{1024} * 1024;
 constexpr int kKeepAliveSeconds = 30;
 constexpr int kConnectTimeoutMs = 15000;
 
+QString socketFailureText(QAbstractSocket::SocketError error)
+{
+    switch (error) {
+    case QAbstractSocket::ConnectionRefusedError:
+        return QStringLiteral("The MQTT broker refused the connection.");
+    case QAbstractSocket::RemoteHostClosedError:
+        return QStringLiteral("The MQTT broker closed the connection.");
+    case QAbstractSocket::HostNotFoundError:
+        return QStringLiteral("The MQTT broker host name could not be resolved.");
+    case QAbstractSocket::SocketAccessError:
+        return QStringLiteral("Network access to the MQTT broker was denied.");
+    case QAbstractSocket::SocketResourceError:
+        return QStringLiteral("The system could not allocate a network socket for MQTT.");
+    case QAbstractSocket::SocketTimeoutError:
+        return QStringLiteral("The MQTT broker connection timed out.");
+    case QAbstractSocket::NetworkError:
+        return QStringLiteral("A network error interrupted the MQTT broker connection.");
+    case QAbstractSocket::SslHandshakeFailedError:
+        return QStringLiteral("The MQTT TLS handshake failed.");
+    default:
+        return QStringLiteral("Could not reach the MQTT broker.");
+    }
+}
+
 QString connectionRefusalText(quint8 code)
 {
     switch (code) {
@@ -147,9 +171,9 @@ void MqttClient::beginConnection()
     }
 
     connect(m_socket, &QIODevice::readyRead, this, &MqttClient::processIncomingData);
-    connect(m_socket, &QAbstractSocket::errorOccurred, this, [this](QAbstractSocket::SocketError) {
+    connect(m_socket, &QAbstractSocket::errorOccurred, this, [this](QAbstractSocket::SocketError error) {
         if (m_socket) {
-            reportFailure(QStringLiteral("Could not reach the MQTT broker."));
+            reportFailure(socketFailureText(error));
         }
     });
     connect(m_socket, &QAbstractSocket::disconnected, this, [this] {

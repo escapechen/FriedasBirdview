@@ -41,6 +41,12 @@ versioning when releases are tagged.
 - Qt 6.10 and newer request the FFmpeg backend's supported low-latency
   streaming playback intent.
 
+### Fixed
+
+- MQTT settings now keep the entered broker draft visible after validation or
+  connection failures. Testing validates the entered settings first and shows
+  a privacy-safe reason when the broker cannot be reached.
+
 ## [1.9.0]
 
 ### Added

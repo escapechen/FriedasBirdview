@@ -14,8 +14,18 @@ changes do not require a release version bump.
 Before publishing:
 
 1. Update `CMakeLists.txt` and add a matching `CHANGELOG.md` section.
-2. Build and smoke-test Linux/Flatpak and the Windows installer.
-3. Commit the release changes, then create the exact matching signed tag:
+2. Commit and push the release candidate, but do not create a tag yet.
+3. Build and smoke-test Linux/Flatpak plus an untagged Windows candidate from
+   the exact pushed commit:
+
+   ```sh
+   ./build-and-install-windows.sh --candidate origin/main
+   ```
+
+   Install the generated candidate installer and confirm its behavior in a
+   Windows desktop session. Candidate builds cannot be uploaded to GitHub
+   Releases.
+4. Create the exact matching signed tag only after those checks pass:
 
    ```sh
    git tag -s v1.10.0 -m "FriedasBirdview 1.10.0"

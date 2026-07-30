@@ -394,7 +394,7 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     mqttControls->addWidget(m_applyMqttSettings);
     m_verifyMqttConnection = new QPushButton(QStringLiteral("Test connection"), m_mqttSettingsSection);
     m_verifyMqttConnection->setToolTip(QStringLiteral(
-        "Verifies the saved MQTT connection, TLS validation, credentials, and subscriptions to the Frigate events and reviews topics."
+        "Validates and saves the entered MQTT settings, then verifies TLS, credentials, and subscriptions to the Frigate events and reviews topics."
     ));
     mqttControls->addWidget(m_verifyMqttConnection);
     mqttControls->addStretch();
@@ -461,9 +461,15 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
         ));
     });
     connect(m_applyMqttSettings, &QPushButton::clicked, this, &SettingsDialog::applyMqttSettings);
-    connect(m_verifyMqttConnection, &QPushButton::clicked, m_monitor, &FrigateMonitor::verifyMqttConnection);
+    connect(m_verifyMqttConnection, &QPushButton::clicked, this, &SettingsDialog::verifyMqttConnection);
     connect(m_mqttBrokerHost, &QLineEdit::returnPressed, this, &SettingsDialog::applyMqttSettings);
     connect(m_mqttPassword, &QLineEdit::returnPressed, this, &SettingsDialog::applyMqttSettings);
+    connect(m_mqttBrokerHost, &QLineEdit::textEdited, this, &SettingsDialog::markMqttSettingsDirty);
+    connect(m_mqttBrokerPort, &QSpinBox::valueChanged, this, [this](int) { markMqttSettingsDirty(); });
+    connect(m_mqttUseTls, &QCheckBox::toggled, this, [this](bool) { markMqttSettingsDirty(); });
+    connect(m_mqttUsername, &QLineEdit::textEdited, this, &SettingsDialog::markMqttSettingsDirty);
+    connect(m_mqttPassword, &QLineEdit::textEdited, this, &SettingsDialog::markMqttSettingsDirty);
+    connect(m_mqttTopicPrefix, &QLineEdit::textEdited, this, &SettingsDialog::markMqttSettingsDirty);
     connect(m_soundAlertEnabled, &QCheckBox::toggled, m_monitor, &FrigateMonitor::setSoundAlertEnabled);
     connect(m_alertSound, &QComboBox::currentIndexChanged, this, [this](int index) {
         m_monitor->setAlertSound(static_cast<FrigateMonitor::AlertSound>(m_alertSound->itemData(index).toInt()));
@@ -526,13 +532,9 @@ void SettingsDialog::synchronize()
     if (!m_username->hasFocus()) {
         m_username->setText(m_monitor->username());
     }
-    if (!m_mqttBrokerHost->hasFocus()) {
+    if (!m_mqttSettingsDirty) {
         m_mqttBrokerHost->setText(m_monitor->mqttBrokerHost());
-    }
-    if (!m_mqttUsername->hasFocus()) {
         m_mqttUsername->setText(m_monitor->mqttUsername());
-    }
-    if (!m_mqttTopicPrefix->hasFocus()) {
         m_mqttTopicPrefix->setText(m_monitor->mqttTopicPrefix());
     }
     {
@@ -560,8 +562,10 @@ void SettingsDialog::synchronize()
         m_eventDeliveryMode->setCurrentIndex(
             m_eventDeliveryMode->findData(static_cast<int>(m_monitor->eventDeliveryMode()))
         );
-        m_mqttBrokerPort->setValue(m_monitor->mqttBrokerPort());
-        m_mqttUseTls->setChecked(m_monitor->mqttUsesTls());
+        if (!m_mqttSettingsDirty) {
+            m_mqttBrokerPort->setValue(m_monitor->mqttBrokerPort());
+            m_mqttUseTls->setChecked(m_monitor->mqttUsesTls());
+        }
         m_popupTrigger->setCurrentIndex(m_popupTrigger->findData(static_cast<int>(m_monitor->popupTrigger())));
         m_soundAlertEnabled->setChecked(m_monitor->isSoundAlertEnabled());
         m_alertSound->setCurrentIndex(m_alertSound->findData(static_cast<int>(m_monitor->alertSound())));
@@ -684,7 +688,9 @@ void SettingsDialog::updateEventDeliveryControls()
     m_eventDeliveryStatus->setText(status.isEmpty()
         ? QStringLiteral("Configure an MQTT broker, then apply these settings.")
         : status);
-    const QString verification = m_monitor->mqttVerificationStatus();
+    const QString verification = m_mqttDraftError.isEmpty()
+        ? m_monitor->mqttVerificationStatus()
+        : m_mqttDraftError;
     m_mqttVerificationStatus->setText(verification);
     m_mqttVerificationStatus->setVisible(!verification.isEmpty());
     m_verifyMqttConnection->setEnabled(!m_monitor->isMqttVerificationInProgress());
@@ -738,6 +744,18 @@ void SettingsDialog::applySettings()
 
 void SettingsDialog::applyMqttSettings()
 {
+    saveMqttSettings();
+}
+
+void SettingsDialog::verifyMqttConnection()
+{
+    if (saveMqttSettings()) {
+        m_monitor->verifyMqttConnection();
+    }
+}
+
+bool SettingsDialog::saveMqttSettings()
+{
     if (m_monitor->applyMqttSettings(
             m_mqttBrokerHost->text(),
             m_mqttBrokerPort->value(),
@@ -746,8 +764,23 @@ void SettingsDialog::applyMqttSettings()
             m_mqttPassword->text(),
             m_mqttTopicPrefix->text())) {
         m_mqttPassword->clear();
+        m_mqttSettingsDirty = false;
+        m_mqttDraftError.clear();
         synchronize();
+        return true;
     }
+
+    m_mqttDraftError = QStringLiteral("MQTT settings were not applied: %1")
+        .arg(m_monitor->connectionStateTitle());
+    updateEventDeliveryControls();
+    return false;
+}
+
+void SettingsDialog::markMqttSettingsDirty()
+{
+    m_mqttSettingsDirty = true;
+    m_mqttDraftError.clear();
+    updateEventDeliveryControls();
 }
 
 void SettingsDialog::addClassification()

@@ -37,6 +37,9 @@ private:
     QString autostartPortalParentWindowId() const;
     void applySettings();
     void applyMqttSettings();
+    void verifyMqttConnection();
+    bool saveMqttSettings();
+    void markMqttSettingsDirty();
     void addClassification();
     void addCustomCaCertificates();
     void removeCustomCaCertificates();
@@ -68,6 +71,8 @@ private:
     QPushButton *m_verifyMqttConnection = nullptr;
     QLabel *m_mqttVerificationStatus = nullptr;
     QLabel *m_eventDeliveryStatus = nullptr;
+    bool m_mqttSettingsDirty = false;
+    QString m_mqttDraftError;
     QCheckBox *m_soundAlertEnabled = nullptr;
     QComboBox *m_alertSound = nullptr;
     QSlider *m_soundAlertVolume = nullptr;

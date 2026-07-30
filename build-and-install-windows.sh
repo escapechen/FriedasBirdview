@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build a tagged Windows release on a configured VM and optionally attach it to
-# its existing GitHub Release. Configuration stays in the ignored local file.
+# Build either a pushed Windows release candidate or a tagged release on a
+# configured VM. Configuration stays in the ignored local file.
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -15,19 +15,26 @@ die() {
 usage() {
     cat <<'EOF'
 Usage: ./build-and-install-windows.sh [--publish] [--config FILE] vX.Y.Z
+       ./build-and-install-windows.sh --candidate GIT-REF [--config FILE]
 
 Fetches the requested tag on the configured Windows VM, creates or resets an
-isolated release worktree, then builds and tests it. The script downloads the
-Setup installer and its SHA-256 manifest and verifies the download locally.
---publish additionally attaches both files to the existing GitHub Release. It
-never creates a release, tag, or commit, and never alters the configured
-source checkout.
+isolated release worktree, then builds and tests it. --candidate instead
+resolves a pushed Git ref to an exact commit and builds it in an isolated
+candidate worktree. Candidate assets are stored locally only and cannot be
+published by this script.
+
+The script downloads the Setup installer and its SHA-256 manifest and verifies
+the download locally. --publish is valid only for a release tag and additionally
+attaches both verified files to the existing GitHub Release. The script never
+creates a release, tag, or commit, and never alters the configured source
+checkout.
 EOF
 }
 
 publish=false
 config_file=$default_config
 release_tag=
+candidate_ref=
 while (($#)); do
     case "$1" in
         --publish)
@@ -38,6 +45,12 @@ while (($#)); do
             config_file=$2
             shift
             ;;
+        --candidate)
+            (($# >= 2)) || die '--candidate needs a pushed Git ref.'
+            [[ -z $release_tag && -z $candidate_ref ]] || die 'Choose either a release tag or --candidate, not both.'
+            candidate_ref=$2
+            shift
+            ;;
         --help|-h)
             usage
             exit 0
@@ -46,19 +59,28 @@ while (($#)); do
             die "Unknown option: $1"
             ;;
         *)
-            [[ -z $release_tag ]] || die 'Provide exactly one release tag.'
+            [[ -z $release_tag && -z $candidate_ref ]] || die 'Choose either a release tag or --candidate, not both.'
             release_tag=$1
             ;;
     esac
     shift
 done
 
-[[ -n $release_tag ]] || {
+[[ -n $release_tag || -n $candidate_ref ]] || {
     usage >&2
     exit 2
 }
-[[ $release_tag =~ ^v[0-9]+[.][0-9]+[.][0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]] ||
-    die "Release tag must look like v1.2.3, not '$release_tag'."
+if [[ -n $release_tag ]]; then
+    [[ $release_tag =~ ^v[0-9]+[.][0-9]+[.][0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]] ||
+        die "Release tag must look like v1.2.3, not '$release_tag'."
+    build_mode=release
+    build_reference=$release_tag
+else
+    [[ -n $candidate_ref ]] || die '--candidate needs a pushed Git ref.'
+    $publish && die '--publish is only valid with a release tag, never with --candidate.'
+    build_mode=candidate
+    build_reference=$candidate_ref
+fi
 [[ -r $config_file ]] || die "Configuration file is missing: $config_file (copy build-and-install-windows.conf.example first)."
 
 # This is deliberately a shell file so Windows paths do not need a second
@@ -91,7 +113,7 @@ reject_line_breaks() {
     [[ $value != *$'\n'* && $value != *$'\r'* ]] || die "$name must not contain a line break."
 }
 
-for name in WINDOWS_SSH_TARGET WINDOWS_REPOSITORY_DIR WINDOWS_QT_ROOT WINDOWS_VCPKG_ROOT WINDOWS_VSDEVCMD GITHUB_REPOSITORY WINDOWS_SIGNING_CERT_THUMBPRINT WINDOWS_SIGNING_TIMESTAMP_URL; do
+for name in WINDOWS_SSH_TARGET WINDOWS_REPOSITORY_DIR WINDOWS_QT_ROOT WINDOWS_VCPKG_ROOT WINDOWS_VSDEVCMD GITHUB_REPOSITORY WINDOWS_SIGNING_CERT_THUMBPRINT WINDOWS_SIGNING_TIMESTAMP_URL build_reference; do
     reject_line_breaks "$name" "${!name}"
 done
 
@@ -99,9 +121,14 @@ if [[ -n $WINDOWS_SSH_IDENTITY_FILE ]]; then
     [[ -r $WINDOWS_SSH_IDENTITY_FILE ]] || die "WINDOWS_SSH_IDENTITY_FILE is not readable: $WINDOWS_SSH_IDENTITY_FILE"
 fi
 
-version=${release_tag#v}
-installer_name="FriedasBirdview-$version-Setup-x64.exe"
-asset_directory="$script_dir/dist/windows/$release_tag"
+version=
+installer_name=
+asset_directory=
+if [[ $build_mode == release ]]; then
+    version=${release_tag#v}
+    installer_name="FriedasBirdview-$version-Setup-x64.exe"
+    asset_directory="$script_dir/dist/windows/$release_tag"
+fi
 
 verify_local_assets() {
     local checksum_file=$asset_directory/$installer_name.sha256
@@ -131,7 +158,7 @@ publish_assets() {
     printf 'Uploaded verified Windows installer assets to %s release %s.\n' "$GITHUB_REPOSITORY" "$release_tag"
 }
 
-if [[ -e $asset_directory ]]; then
+if [[ $build_mode == release && -e $asset_directory ]]; then
     [[ -d $asset_directory ]] || die "Local asset path is not a directory: $asset_directory"
     if $publish; then
         verify_local_assets
@@ -163,7 +190,8 @@ remote_settings=$(printf '%s\n' \
     "\$QtRoot = $(powershell_literal "$WINDOWS_QT_ROOT")" \
     "\$VcpkgRoot = $(powershell_literal "$WINDOWS_VCPKG_ROOT")" \
     "\$VsDevCmd = $(powershell_literal "$WINDOWS_VSDEVCMD")" \
-    "\$ReleaseTag = $(powershell_literal "$release_tag")" \
+    "\$BuildMode = $(powershell_literal "$build_mode")" \
+    "\$BuildReference = $(powershell_literal "$build_reference")" \
     "\$SigningCertificateThumbprint = $(powershell_literal "$WINDOWS_SIGNING_CERT_THUMBPRINT")" \
     "\$SigningTimestampUrl = $(powershell_literal "$WINDOWS_SIGNING_TIMESTAMP_URL")" \
     "\$AllowNoCTests = $allow_no_ctests_ps")
@@ -203,79 +231,95 @@ if (-not $sourceTopLevel.Equals($repositoryRoot, [System.StringComparison]::Ordi
     throw "WINDOWS_REPOSITORY_DIR must name the source checkout root, not a subdirectory: $RepositoryDir"
 }
 
-& git.exe -C $RepositoryDir fetch --tags --force origin
+& git.exe -C $RepositoryDir fetch --prune --tags --force origin
 if ($LASTEXITCODE -ne 0) {
-    throw 'Fetching release tags from origin failed.'
+    throw 'Fetching the candidate/release refs from origin failed.'
 }
 
-$tagCommitOutput = & git.exe -C $RepositoryDir rev-parse ($ReleaseTag + '^{commit}')
+$targetCommitOutput = & git.exe -C $RepositoryDir rev-parse ($BuildReference + '^{commit}')
 if ($LASTEXITCODE -ne 0) {
-    throw "The source checkout does not know release tag $ReleaseTag after fetching tags."
+    throw "The source checkout does not know build reference $BuildReference after fetching origin."
 }
-$tagCommit = ($tagCommitOutput -join "`n").Trim()
-if ([string]::IsNullOrWhiteSpace($tagCommit)) {
-    throw "The source checkout does not know release tag $ReleaseTag after fetching tags."
+$targetCommit = ($targetCommitOutput -join "`n").Trim()
+if ($targetCommit -notmatch '^[0-9a-f]{40}$') {
+    throw "Build reference $BuildReference did not resolve to a full commit ID."
 }
+
+$shortTargetCommit = $targetCommit.Substring(0, 12)
+$worktreeSuffix = switch ($BuildMode) {
+    'release' {
+        "release-$BuildReference"
+        break
+    }
+    'candidate' {
+        "candidate-$shortTargetCommit"
+        break
+    }
+    default {
+        throw "Unsupported build mode: $BuildMode"
+    }
+}
+$targetDescription = if ($BuildMode -eq 'release') { "release tag $BuildReference" } else { "candidate $shortTargetCommit" }
 
 $sourceLeaf = Split-Path -Path $RepositoryDir -Leaf
-$releaseWorktreeDir = Join-Path (Split-Path -Path $RepositoryDir -Parent) "$sourceLeaf-release-$ReleaseTag"
-if (Test-Path -LiteralPath $releaseWorktreeDir) {
+$managedWorktreeDir = Join-Path (Split-Path -Path $RepositoryDir -Parent) "$sourceLeaf-$worktreeSuffix"
+if (Test-Path -LiteralPath $managedWorktreeDir) {
     $sourceCommonGitDirOutput = & git.exe -C $RepositoryDir rev-parse --path-format=absolute --git-common-dir
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not determine the source checkout Git directory.'
     }
-    $worktreeCommonGitDirOutput = & git.exe -C $releaseWorktreeDir rev-parse --path-format=absolute --git-common-dir
+    $worktreeCommonGitDirOutput = & git.exe -C $managedWorktreeDir rev-parse --path-format=absolute --git-common-dir
     if ($LASTEXITCODE -ne 0) {
-        throw "Existing release directory is not a Git worktree: $releaseWorktreeDir"
+        throw "Existing managed build directory is not a Git worktree: $managedWorktreeDir"
     }
     $sourceCommonGitDir = ($sourceCommonGitDirOutput -join "`n").Trim().TrimEnd([char[]]@('\', '/'))
     $worktreeCommonGitDir = ($worktreeCommonGitDirOutput -join "`n").Trim().TrimEnd([char[]]@('\', '/'))
     if (-not $sourceCommonGitDir.Equals($worktreeCommonGitDir, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing to clean a release directory owned by another repository: $releaseWorktreeDir"
+        throw "Refusing to clean a build directory owned by another repository: $managedWorktreeDir"
     }
 
-    Write-Output "Resetting script-managed release worktree: $releaseWorktreeDir"
-    & git.exe -C $releaseWorktreeDir reset --hard --quiet $tagCommit
+    Write-Output "Resetting script-managed $BuildMode worktree: $managedWorktreeDir"
+    & git.exe -C $managedWorktreeDir reset --hard --quiet $targetCommit
     if ($LASTEXITCODE -ne 0) {
-        throw "Could not reset the release worktree: $releaseWorktreeDir"
+        throw "Could not reset the $BuildMode worktree: $managedWorktreeDir"
     }
-    & git.exe -C $releaseWorktreeDir clean -ffdx
+    & git.exe -C $managedWorktreeDir clean -ffdx
     if ($LASTEXITCODE -ne 0) {
-        throw "Could not clean the release worktree: $releaseWorktreeDir"
+        throw "Could not clean the $BuildMode worktree: $managedWorktreeDir"
     }
 } else {
-    Write-Output "Creating clean release worktree: $releaseWorktreeDir"
-    & git.exe -C $RepositoryDir worktree add --detach $releaseWorktreeDir $tagCommit
+    Write-Output "Creating clean $BuildMode worktree: $managedWorktreeDir"
+    & git.exe -C $RepositoryDir worktree add --detach $managedWorktreeDir $targetCommit
     if ($LASTEXITCODE -ne 0) {
-        throw "Could not create the release worktree: $releaseWorktreeDir"
+        throw "Could not create the $BuildMode worktree: $managedWorktreeDir"
     }
 }
 
-$headCommitOutput = & git.exe -C $releaseWorktreeDir rev-parse HEAD
+$headCommitOutput = & git.exe -C $managedWorktreeDir rev-parse HEAD
 if ($LASTEXITCODE -ne 0) {
-    throw 'Could not determine the release worktree commit.'
+    throw "Could not determine the $BuildMode worktree commit."
 }
 $headCommit = ($headCommitOutput -join "`n").Trim()
-if ($headCommit -ne $tagCommit) {
-    throw "Release worktree is not at $ReleaseTag. It is at $headCommit."
+if ($headCommit -ne $targetCommit) {
+    throw "The $BuildMode worktree is not at $targetDescription. It is at $headCommit."
 }
 
-$cmakeLists = Get-Content -LiteralPath (Join-Path $releaseWorktreeDir 'CMakeLists.txt') -Raw
+$cmakeLists = Get-Content -LiteralPath (Join-Path $managedWorktreeDir 'CMakeLists.txt') -Raw
 $versionMatch = [regex]::Match($cmakeLists, 'project\(FriedasBirdview VERSION ([0-9][^ )]*)')
 if (-not $versionMatch.Success) {
     throw 'Could not determine the CMake project version.'
 }
 $version = $versionMatch.Groups[1].Value
-if ($ReleaseTag -ne "v$version") {
-    throw "Release tag $ReleaseTag does not match CMake project version $version."
+if ($BuildMode -eq 'release' -and $BuildReference -ne "v$version") {
+    throw "Release tag $BuildReference does not match CMake project version $version."
 }
 
 Import-DeveloperEnvironment
 $env:QT_ROOT = $QtRoot
 
-$buildDirectory = Join-Path $releaseWorktreeDir 'build-win-package'
-$outputDirectory = Join-Path $releaseWorktreeDir 'dist'
-$packageScript = Join-Path $releaseWorktreeDir 'packaging\windows\package.ps1'
+$buildDirectory = Join-Path $managedWorktreeDir 'build-win-package'
+$outputDirectory = Join-Path $managedWorktreeDir 'dist'
+$packageScript = Join-Path $managedWorktreeDir 'packaging\windows\package.ps1'
 $packageParameters = @{
     QtRoot = $QtRoot
     VcpkgRoot = $VcpkgRoot
@@ -304,7 +348,7 @@ if (-not $testCountMatch.Success) {
 }
 $testCount = [int]$testCountMatch.Groups[1].Value
 if ($testCount -eq 0 -and -not $AllowNoCTests) {
-    throw 'No CTest tests are registered; refusing to publish. Add tests or explicitly set WINDOWS_ALLOW_NO_CTEST_TESTS=1 for a temporary exception.'
+    throw 'No CTest tests are registered; refusing to package. Add tests or explicitly set WINDOWS_ALLOW_NO_CTEST_TESTS=1 for a temporary exception.'
 }
 if ($testCount -gt 0) {
     & ctest.exe --test-dir $buildDirectory --output-on-failure
@@ -331,6 +375,8 @@ $checksum = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowe
 
 Write-Output "Installer: $installer"
 Write-Output "Checksum: $checksumFile"
+Write-Output "FRIEDASBIRDVIEW_BUILD_VERSION=$version"
+Write-Output "FRIEDASBIRDVIEW_BUILD_COMMIT=$headCommit"
 POWERSHELL
 
 remote_script="$remote_settings"$'\n'"try {"$'\n'"$remote_job"$'\n'"} catch {"$'\n'"    [Console]::Error.WriteLine(\$_.Exception.Message)"$'\n'"    exit 1"$'\n'"}"
@@ -340,11 +386,37 @@ remote_launcher="\$b=[Convert]::FromBase64String('$remote_payload');\$m=[IO.Memo
 remote_command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"$remote_launcher\""
 
 printf '%s\n' 'Building and testing on the Windows VM...'
-ssh "${ssh_options[@]}" "$WINDOWS_SSH_TARGET" "$remote_command"
+remote_output=$(ssh "${ssh_options[@]}" "$WINDOWS_SSH_TARGET" "$remote_command")
+printf '%s\n' "$remote_output"
+
+remote_build_version=$(printf '%s\n' "$remote_output" | awk -F= '$1 == "FRIEDASBIRDVIEW_BUILD_VERSION" { value = $2 } END { print value }' | tr -d '\r')
+remote_build_commit=$(printf '%s\n' "$remote_output" | awk -F= '$1 == "FRIEDASBIRDVIEW_BUILD_COMMIT" { value = $2 } END { print value }' | tr -d '\r')
+[[ $remote_build_version =~ ^[0-9]+[.][0-9]+[.][0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]] ||
+    die 'The Windows VM did not report a valid CMake project version.'
+[[ $remote_build_commit =~ ^[0-9a-f]{40}$ ]] ||
+    die 'The Windows VM did not report a valid candidate/release commit.'
+
+if [[ $build_mode == release ]]; then
+    [[ $remote_build_version == "$version" ]] ||
+        die "The Windows VM built version $remote_build_version, expected $version from $release_tag."
+else
+    version=$remote_build_version
+    installer_name="FriedasBirdview-$version-Setup-x64.exe"
+    candidate_commit=${remote_build_commit:0:12}
+    asset_directory="$script_dir/dist/windows/candidate-$candidate_commit"
+    if [[ -e $asset_directory ]]; then
+        [[ -d $asset_directory ]] || die "Local candidate asset path is not a directory: $asset_directory"
+        die "Verified candidate assets already exist: $asset_directory"
+    fi
+fi
 
 remote_worktree=${WINDOWS_REPOSITORY_DIR//\\//}
 remote_worktree=${remote_worktree%/}
-remote_worktree="$remote_worktree-release-$release_tag"
+if [[ $build_mode == release ]]; then
+    remote_worktree="$remote_worktree-release-$release_tag"
+else
+    remote_worktree="$remote_worktree-candidate-${remote_build_commit:0:12}"
+fi
 remote_dist="$remote_worktree/dist"
 remote_installer="$remote_dist/$installer_name"
 remote_checksum="$remote_installer.sha256"
@@ -372,6 +444,11 @@ mkdir -p -- "$(dirname -- "$asset_directory")"
 mv -- "$temporary_download" "$asset_directory"
 temporary_download=
 printf 'Verified local assets: %s\n' "$asset_directory"
+
+if [[ $build_mode == candidate ]]; then
+    printf '%s\n' 'Candidate assets are local-only and cannot be uploaded by this script. Smoke-test this installer before tagging the reported commit.'
+    exit 0
+fi
 
 if ! $publish; then
     printf '%s\n' 'Not uploaded. Re-run with --publish to attach these verified assets to the existing GitHub Release.'

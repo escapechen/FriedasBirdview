@@ -190,20 +190,31 @@ an existing GitHub Release. It does not create tags, commits, or releases.
 cp build-and-install-windows.conf.example build-and-install-windows.conf
 chmod 600 build-and-install-windows.conf
 # Edit only the ignored local config. Its Windows repository path names the
-# ordinary source checkout; it may have local changes. The script fetches the
-# tag and uses a clean sibling worktree automatically.
+# ordinary source checkout; it may have local changes. Test a pushed commit
+# before creating a tag or GitHub Release. The ref is resolved remotely after
+# fetch, then built in a clean sibling candidate worktree.
+./build-and-install-windows.sh --candidate origin/main
+# Install and smoke-test the local candidate installer before tagging.
+# The command prints its exact commit and stores it below:
+# dist/windows/candidate-<12-character-commit>/
+
+# After the tested commit is signed and tagged, build the immutable release.
 ./build-and-install-windows.sh v1.2.3
 # After the GitHub Release exists, this reuses the locally verified assets; it
 # does not rebuild the Windows VM package.
 ./build-and-install-windows.sh --publish v1.2.3
 ```
 
-The tag must exactly match the CMake version (`v1.2.3` for `1.2.3`). The script
-fetches that tag and creates or resets only its sibling worktree named
-`FriedasBirdview-release-v1.2.3`; it never changes the configured source
-checkout. CTest failures, zero CTest tests (unless explicitly allowed in the
-ignored config), hash mismatches, or a missing GitHub Release stop the process.
-Local assets are kept under ignored `dist/windows/<tag>/`.
+Candidate mode never creates or uploads a GitHub Release asset, and it refuses
+`--publish`. Its clean VM worktree is named
+`FriedasBirdview-candidate-<12-character-commit>`. The normal release tag must
+exactly match the CMake version (`v1.2.3` for `1.2.3`); release mode creates or
+resets only `FriedasBirdview-release-v1.2.3`. Neither mode changes the configured
+source checkout. CTest failures, zero CTest tests (unless explicitly allowed
+in the ignored config), hash mismatches, or a missing GitHub Release stop the
+relevant step. Candidate assets live below ignored
+`dist/windows/candidate-<12-character-commit>/`; release assets live below
+`dist/windows/<tag>/`.
 
 ## Verification checklist
 
