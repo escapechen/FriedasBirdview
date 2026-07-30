@@ -386,7 +386,10 @@ remote_launcher="\$b=[Convert]::FromBase64String('$remote_payload');\$m=[IO.Memo
 remote_command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"$remote_launcher\""
 
 printf '%s\n' 'Building and testing on the Windows VM...'
-remote_output=$(ssh "${ssh_options[@]}" "$WINDOWS_SSH_TARGET" "$remote_command")
+if ! remote_output=$(ssh "${ssh_options[@]}" "$WINDOWS_SSH_TARGET" "$remote_command" 2>&1); then
+    printf '%s\n' "$remote_output" >&2
+    die 'Windows VM build or test failed.'
+fi
 printf '%s\n' "$remote_output"
 
 remote_build_version=$(printf '%s\n' "$remote_output" | awk -F= '$1 == "FRIEDASBIRDVIEW_BUILD_VERSION" { value = $2 } END { print value }' | tr -d '\r')
