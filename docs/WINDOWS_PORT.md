@@ -9,8 +9,8 @@ contains no production connection details or credentials.
 - Linux/KDE is available as a native build and Flatpak bundle.
 - Windows 11 x64 is available as a native CMake/MSVC build and an Inno Setup
   installer with its runtime dependencies included.
-- The CMake project currently reports version `1.10.0`; release it as tag
-  `v1.10.0` after the Windows installer smoke test passes.
+- The CMake project currently reports version `1.11.0`; release it as tag
+  `v1.11.0` after the Windows installer smoke test passes.
 
 ## What is already portable
 

@@ -1,7 +1,7 @@
 # Releasing FriedasBirdview
 
 FriedasBirdview releases native Linux/KDE and Windows builds. The current
-release preparation is version `1.10.0`. The
+release preparation is version `1.11.0`. The
 `project(... VERSION ...)` value in `CMakeLists.txt` is the single source of
 truth for every release artifact: the Windows Setup filename/version, the
 host-side upload script, and the release-tag validation in GitHub Actions.
@@ -28,8 +28,8 @@ Before publishing:
 4. Create the exact matching signed tag only after those checks pass:
 
    ```sh
-   git tag -s v1.10.0 -m "FriedasBirdview 1.10.0"
-   git push origin v1.10.0
+   git tag -s v1.11.0 -m "FriedasBirdview 1.11.0"
+   git push origin v1.11.0
    ```
 
 GitHub Actions and `build-and-install-windows.sh` reject a release tag that

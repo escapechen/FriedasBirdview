@@ -37,4 +37,5 @@ private:
     QAction *m_monitoringAction = nullptr;
     QHash<int, QAction *> m_durationActions;
     FrigateMonitor::ConnectionState m_lastConnectionState = FrigateMonitor::ConnectionState::Idle;
+    bool m_initialConnectionEstablished = false;
 };

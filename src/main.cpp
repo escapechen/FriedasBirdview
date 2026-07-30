@@ -1,5 +1,6 @@
 #include "AppController.h"
 #include "AppBuildConfig.h"
+#include "AppTheme.h"
 
 #include <QApplication>
 #include <QFile>
@@ -90,6 +91,7 @@ int main(int argc, char *argv[])
     // used by the rest of the desktop integration.
     QGuiApplication::setDesktopFileName(QStringLiteral(FRIEDASBIRDVIEW_APPLICATION_ID));
     QApplication app(argc, argv);
+    AppTheme::apply(app);
     QCoreApplication::setOrganizationDomain(QStringLiteral("org.friedasbirdview"));
     QCoreApplication::setOrganizationName(QStringLiteral("FriedasBirdview"));
     QCoreApplication::setApplicationName(QStringLiteral("FriedasBirdview"));

@@ -21,6 +21,7 @@
 #include <QSpinBox>
 #include <QStandardPaths>
 #include <QSettings>
+#include <QStyle>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
@@ -57,20 +58,21 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     , m_autostart(autostart)
 {
     setWindowTitle(QStringLiteral("FriedasBirdview Settings"));
+    setObjectName(QStringLiteral("settingsDialog"));
     setModal(false);
     setMinimumSize(560, 500);
-    resize(660, 650);
+    resize(720, 650);
 
     auto *dialogLayout = new QVBoxLayout(this);
-    dialogLayout->setContentsMargins(6, 4, 6, 4);
-    dialogLayout->setSpacing(4);
+    dialogLayout->setContentsMargins(10, 8, 10, 10);
+    dialogLayout->setSpacing(8);
     m_tabs = new QTabWidget(this);
     dialogLayout->addWidget(m_tabs, 1);
     const auto addTab = [this](const QString &title) {
         auto *tab = new QWidget(m_tabs);
         auto *tabLayout = new QVBoxLayout(tab);
-        tabLayout->setContentsMargins(6, 6, 6, 6);
-        tabLayout->setSpacing(4);
+        tabLayout->setContentsMargins(10, 10, 10, 10);
+        tabLayout->setSpacing(8);
         tabLayout->setAlignment(Qt::AlignTop);
         m_tabs->addTab(tab, title);
         return tabLayout;
@@ -110,6 +112,7 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     m_serverAddress = new QLineEdit(connectionGroup);
     m_serverAddress->setPlaceholderText(QStringLiteral("https://frigate.example.net:8971"));
     auto *applyButton = new QPushButton(QStringLiteral("Apply"), connectionGroup);
+    applyButton->setObjectName(QStringLiteral("primaryButton"));
     auto *serverLayout = new QHBoxLayout;
     serverLayout->addWidget(m_serverAddress);
     serverLayout->addWidget(applyButton);
@@ -391,6 +394,7 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     mqttLayout->addRow(QStringLiteral("Topic prefix:"), m_mqttTopicPrefix);
     auto *mqttControls = new QHBoxLayout;
     m_applyMqttSettings = new QPushButton(QStringLiteral("Apply MQTT settings"), m_mqttSettingsSection);
+    m_applyMqttSettings->setObjectName(QStringLiteral("primaryButton"));
     mqttControls->addWidget(m_applyMqttSettings);
     m_verifyMqttConnection = new QPushButton(QStringLiteral("Test connection"), m_mqttSettingsSection);
     m_verifyMqttConnection->setToolTip(QStringLiteral(
@@ -400,6 +404,7 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     mqttControls->addStretch();
     mqttLayout->addRow(QString(), mqttControls);
     m_mqttVerificationStatus = new QLabel(m_mqttSettingsSection);
+    m_mqttVerificationStatus->setObjectName(QStringLiteral("verificationStatus"));
     m_mqttVerificationStatus->setWordWrap(true);
     m_mqttVerificationStatus->setVisible(false);
     mqttLayout->addRow(QString(), m_mqttVerificationStatus);
@@ -423,11 +428,13 @@ SettingsDialog::SettingsDialog(FrigateMonitor *monitor, AutostartManager *autost
     deliveryLayout->addStretch();
 
     m_status = new QLabel(this);
+    m_status->setObjectName(QStringLiteral("dialogStatus"));
     m_status->setWordWrap(true);
     dialogLayout->addWidget(m_status);
 
     auto *controls = new QHBoxLayout;
     m_monitorButton = new QPushButton(this);
+    m_monitorButton->setObjectName(QStringLiteral("primaryButton"));
     auto *showFeedButton = new QPushButton(QStringLiteral("Show Feed"), this);
     auto *closeButton = new QPushButton(QStringLiteral("Close"), this);
     controls->addWidget(m_monitorButton);
@@ -693,6 +700,20 @@ void SettingsDialog::updateEventDeliveryControls()
         : m_mqttDraftError;
     m_mqttVerificationStatus->setText(verification);
     m_mqttVerificationStatus->setVisible(!verification.isEmpty());
+    QString verificationStyle;
+    if (verification.startsWith(QStringLiteral("MQTT verification succeeded:"), Qt::CaseInsensitive)) {
+        verificationStyle = QStringLiteral("success");
+    } else if (verification.startsWith(QStringLiteral("MQTT verification failed:"), Qt::CaseInsensitive)
+        || !m_mqttDraftError.isEmpty()) {
+        verificationStyle = QStringLiteral("error");
+    } else if (!verification.isEmpty()) {
+        verificationStyle = QStringLiteral("progress");
+    }
+    if (m_mqttVerificationStatus->property("status").toString() != verificationStyle) {
+        m_mqttVerificationStatus->setProperty("status", verificationStyle);
+        m_mqttVerificationStatus->style()->unpolish(m_mqttVerificationStatus);
+        m_mqttVerificationStatus->style()->polish(m_mqttVerificationStatus);
+    }
     m_verifyMqttConnection->setEnabled(!m_monitor->isMqttVerificationInProgress());
     m_verifyMqttConnection->setText(m_monitor->isMqttVerificationInProgress()
         ? QStringLiteral("Testing MQTT…")

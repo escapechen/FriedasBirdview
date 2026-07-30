@@ -167,44 +167,43 @@ OverlayWindow::OverlayWindow(const QList<QSslCertificate> &customCaCertificates,
     auto *frame = new QWidget(this);
     frame->setObjectName(QStringLiteral("feedFrame"));
     frame->setStyleSheet(QStringLiteral(
-        "#feedFrame { background: #111820; border: 1px solid #344656; border-radius: 12px; }"
-        "QToolButton { color: #f5f7fa; background: rgba(20, 28, 36, 220); border: 1px solid #627585; border-radius: 6px; padding: 3px; }"
-        "QToolButton:hover { background: #33495e; }"));
+        "#feedFrame { background: #101a24; border: 1px solid #3a5265; border-radius: 14px; }"
+        "QToolButton { color: #f5f7fa; background: #172431; border: 1px solid #607c91; border-radius: 8px; min-width: 28px; min-height: 28px; padding: 3px; }"
+        "QToolButton:hover { background: #294458; border-color: #8bb8d3; }"));
 
     auto *windowLayout = new QVBoxLayout(this);
-    windowLayout->setContentsMargins(4, 4, 4, 4);
+    windowLayout->setContentsMargins(6, 6, 6, 6);
     windowLayout->addWidget(frame);
     auto *layout = new QVBoxLayout(frame);
-    layout->setContentsMargins(8, 8, 8, 8);
-    layout->setSpacing(6);
+    layout->setContentsMargins(10, 10, 10, 10);
+    layout->setSpacing(8);
+
+    auto *header = new QHBoxLayout;
+    header->setContentsMargins(0, 0, 0, 0);
+    header->setSpacing(8);
 
     m_activityLabel = new QLabel(frame);
-    m_activityLabel->setStyleSheet(QStringLiteral("color: white; background: #bf3b3b; border-radius: 7px; padding: 6px 9px; font-weight: 700;"));
-    m_activityLabel->setText(QStringLiteral("Live feed"));
-    layout->addWidget(m_activityLabel, 0, Qt::AlignLeft);
+    m_activityLabel->setStyleSheet(QStringLiteral("color: white; background: #c43e45; border: 1px solid #e16166; border-radius: 9px; padding: 6px 10px; font-weight: 700;"));
+    m_activityLabel->hide();
+    header->addWidget(m_activityLabel, 0, Qt::AlignLeft);
 
     m_detailLabel = new QLabel(frame);
-    m_detailLabel->setStyleSheet(QStringLiteral("color: #e7eff7; background: #276998; border-radius: 8px; padding: 4px 8px;"));
-    layout->addWidget(m_detailLabel, 0, Qt::AlignLeft);
+    m_detailLabel->setStyleSheet(QStringLiteral("color: #e7eff7; background: #286d9e; border: 1px solid #4e9ed1; border-radius: 8px; padding: 4px 9px; font-weight: 500;"));
+    header->addWidget(m_detailLabel, 0, Qt::AlignLeft);
+    header->addStretch();
+    layout->addLayout(header);
 
-    auto *badges = new QHBoxLayout;
-    badges->setContentsMargins(0, 0, 0, 0);
-    badges->setSpacing(5);
     m_displayBadge = new QLabel(frame);
     m_displayBadge->setStyleSheet(QStringLiteral(
-        "color: #eaf6ff; background: #245d7d; border-radius: 7px; padding: 3px 7px; font-size: 11px; font-weight: 600;"
+        "color: #d9efff; background: #1f597c; border: 1px solid #367ba5; border-radius: 8px; padding: 4px 8px; font-size: 11px; font-weight: 600;"
     ));
     m_liveBadge = new QLabel(frame);
     m_liveBadge->setStyleSheet(QStringLiteral(
-        "color: #e9e5ff; background: #504078; border-radius: 7px; padding: 3px 7px; font-size: 11px; font-weight: 600;"
+        "color: #eee9ff; background: #4f3c77; border: 1px solid #7659a7; border-radius: 8px; padding: 4px 8px; font-size: 11px; font-weight: 600;"
     ));
-    badges->addWidget(m_displayBadge, 0, Qt::AlignLeft);
-    badges->addWidget(m_liveBadge, 0, Qt::AlignLeft);
-    badges->addStretch();
-    layout->addLayout(badges);
 
     auto *feedContainer = new QWidget(frame);
-    feedContainer->setStyleSheet(QStringLiteral("background: #050505; border-radius: 8px;"));
+    feedContainer->setStyleSheet(QStringLiteral("background: #050505; border: 1px solid #1d2c38; border-radius: 9px;"));
     m_feedStack = new QStackedLayout(feedContainer);
     m_feedStack->setContentsMargins(0, 0, 0, 0);
     auto *snapshotLabel = new ClickableLabel(feedContainer);
@@ -224,28 +223,33 @@ OverlayWindow::OverlayWindow(const QList<QSslCertificate> &customCaCertificates,
 
     m_errorLabel = new QLabel(frame);
     m_errorLabel->setWordWrap(true);
-    m_errorLabel->setStyleSheet(QStringLiteral("color: #ffb4ab; background: #5a2020; border-radius: 6px; padding: 5px 8px;"));
+    m_errorLabel->setStyleSheet(QStringLiteral("color: #ffc2bc; background: #5a2527; border: 1px solid #9f464b; border-radius: 8px; padding: 6px 9px;"));
     m_errorLabel->hide();
     layout->addWidget(m_errorLabel);
 
     auto *controls = new QHBoxLayout;
-    controls->setSpacing(6);
+    controls->setContentsMargins(0, 2, 0, 0);
+    controls->setSpacing(8);
+    controls->addWidget(m_displayBadge, 0, Qt::AlignVCenter);
+    controls->addWidget(m_liveBadge, 0, Qt::AlignVCenter);
     m_countdownLabel = new QLabel(frame);
-    m_countdownLabel->setStyleSheet(QStringLiteral("color: #d8e0e7; font-family: monospace;"));
+    m_countdownLabel->setStyleSheet(QStringLiteral("color: #d8e6f0; font-family: monospace; font-weight: 600; padding-right: 2px;"));
     controls->addStretch();
     controls->addWidget(m_countdownLabel);
     m_zoomButton = new QToolButton(frame);
     m_zoomButton->setText(QStringLiteral("⤢"));
     m_zoomButton->setToolTip(QStringLiteral("Enlarge or restore feed"));
+    m_zoomButton->setFixedSize(38, 38);
     controls->addWidget(m_zoomButton);
     auto *dragButton = new DragButton(frame);
     dragButton->setText(QStringLiteral("✋"));
     dragButton->setToolTip(QStringLiteral("Drag to move feed"));
+    dragButton->setFixedSize(38, 38);
     controls->addWidget(dragButton);
     auto *resizeHandle = new ResizeHandle(frame);
     resizeHandle->setText(QStringLiteral("↘"));
     resizeHandle->setToolTip(QStringLiteral("Drag to resize feed"));
-    resizeHandle->setFixedSize(28, 28);
+    resizeHandle->setFixedSize(38, 38);
     controls->addWidget(resizeHandle);
     m_zoomButton->setFocusPolicy(Qt::NoFocus);
     dragButton->setFocusPolicy(Qt::NoFocus);
@@ -441,10 +445,11 @@ void OverlayWindow::updateActivity(const FrigateMonitor::Activity &activity)
 {
     const QString camera = activity.camera.isEmpty() && m_monitor ? m_monitor->currentFeedCameraName() : activity.camera;
     if (activity.title.isEmpty()) {
-        m_activityLabel->setText(QStringLiteral("Live feed"));
+        m_activityLabel->hide();
         m_detailLabel->setText(camera);
         return;
     }
+    m_activityLabel->show();
     m_activityLabel->setText(activity.confidence.isEmpty()
         ? QStringLiteral("◉ %1").arg(activity.title)
         : QStringLiteral("◉ %1  %2").arg(activity.title, activity.confidence));
@@ -589,13 +594,18 @@ void OverlayWindow::updateStreamBadges()
     }
     if (m_requestedMode == FrigateMonitor::FeedMode::Jpeg || m_usingJpegFallback) {
         m_displayBadge->setText(QStringLiteral("JPEG snapshots"));
-        m_liveBadge->setText(QStringLiteral("Live player idle"));
+        m_displayBadge->show();
+        m_liveBadge->hide();
         return;
     }
-    m_displayBadge->setText(m_waitingForLiveStream
-        ? QStringLiteral("JPEG while live connects")
-        : QStringLiteral("Live video"));
+    if (m_waitingForLiveStream) {
+        m_displayBadge->setText(QStringLiteral("JPEG while live connects"));
+    } else {
+        m_displayBadge->setText(QStringLiteral("Live video"));
+    }
+    m_displayBadge->show();
     m_liveBadge->setText(QStringLiteral("%1 · %2").arg(m_liveMethod, m_liveState));
+    m_liveBadge->show();
 }
 
 void OverlayWindow::updateSnapshotPixmap()

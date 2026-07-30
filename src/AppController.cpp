@@ -130,6 +130,20 @@ void AppController::updateTray(FrigateMonitor::ConnectionState state)
     m_tray->setToolTip(QStringLiteral("FriedasBirdview — %1").arg(m_monitor.connectionStateTitle()));
 
     const bool wasFailed = m_lastConnectionState == FrigateMonitor::ConnectionState::Failed;
+
+    // Startup naturally goes through Connecting and, with MQTT, can briefly
+    // report a transient socket state before the broker has completed its
+    // handshake. The tray colour and menu still reflect that state, but do
+    // not present a misleading lost/restored pair until the app has made its
+    // first successful connection.
+    if (!m_initialConnectionEstablished) {
+        if (state == FrigateMonitor::ConnectionState::Connected) {
+            m_initialConnectionEstablished = true;
+        }
+        m_lastConnectionState = state;
+        return;
+    }
+
     if (state == FrigateMonitor::ConnectionState::Failed && !wasFailed) {
         m_tray->showMessage(
             QStringLiteral("FriedasBirdview: connection lost"),

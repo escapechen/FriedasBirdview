@@ -6,6 +6,28 @@ versioning when releases are tagged.
 
 ## [Unreleased]
 
+## [1.11.0]
+
+### Added
+
+- Added a shared, accessible dark Qt visual theme for KDE/Linux and Windows,
+  including refined tabs, form controls, lists, menus, buttons, and MQTT test
+  result panels.
+- Added privacy-safe README product previews using illustrative Frieda artwork
+  and example-only configuration data.
+
+### Changed
+
+- Reworked the floating feed layout into a compact event/camera header and a
+  footer that groups visible-feed status, live-player status, countdown, and
+  feed controls.
+
+### Fixed
+
+- Suppressed misleading connection-lost/restored desktop notifications during
+  the initial MQTT connection handshake. Real outages after the first
+  successful connection still notify normally.
+
 ## [1.10.0]
 
 ### Added
@@ -33,8 +55,6 @@ versioning when releases are tagged.
 
 - The classification selector now expands to use the spare height of the
   Triggers tab while keeping its add control visible.
-
-### Changed
 
 - Native MSE is now the default Linux live-player path. It avoids the failed
   progressive-MP4 attempt and its delay on affected Qt/FFmpeg combinations.
@@ -211,3 +231,4 @@ versioning when releases are tagged.
 [1.8.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.8.0
 [1.9.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.9.0
 [1.10.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.10.0
+[1.11.0]: https://github.com/escapechen/FriedasBirdview/releases/tag/v1.11.0

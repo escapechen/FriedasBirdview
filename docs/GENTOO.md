@@ -10,11 +10,11 @@ The ebuild fetches GitHub's automatic source archive for a version tag, for
 example:
 
 ```text
-https://github.com/escapechen/FriedasBirdview/archive/refs/tags/v1.10.0.tar.gz
+https://github.com/escapechen/FriedasBirdview/archive/refs/tags/v1.11.0.tar.gz
 ```
 
 Therefore a manually created `.tar.gz` or a GitHub Release is **not** required
-for source installs. A pushed, immutable `v1.10.0` tag is required. The
+for source installs. A pushed, immutable `v1.11.0` tag is required. The
 distfile checksum is recorded in Portage's `Manifest` after the tag is
 available.
 
@@ -22,8 +22,8 @@ For a new release, update the project version and changelog, then create and
 push a signed tag:
 
 ```sh
-git tag -s v1.10.0 -m "FriedasBirdview 1.10.0"
-git push origin v1.10.0
+git tag -s v1.11.0 -m "FriedasBirdview 1.11.0"
+git push origin v1.11.0
 ```
 
 A GitHub Release is optional at this stage. It becomes useful later for
@@ -51,11 +51,11 @@ masters = gentoo
 auto-sync = no
 ```
 
-After `v1.10.0` exists on GitHub, generate the checksum manifest. This downloads
+After `v1.11.0` exists on GitHub, generate the checksum manifest. This downloads
 the source archive and records its hashes:
 
 ```sh
-sudo ebuild /var/db/repos/friedasbirdview/net-misc/friedasbirdview/friedasbirdview-1.10.0.ebuild manifest
+sudo ebuild /var/db/repos/friedasbirdview/net-misc/friedasbirdview/friedasbirdview-1.11.0.ebuild manifest
 ```
 
 The first ebuild is keyworded `~amd64`. Accept that keyword locally:

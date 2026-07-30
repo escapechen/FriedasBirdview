@@ -17,7 +17,11 @@ reasoning).
 The Frieda artwork in this repository was created from photographs supplied by
 the project maintainer.
 
-![FriedasBirdview activity popup showing a cat detection](resources/FriedasBirdview-Popup.png)
+The previews below use illustrative artwork and example-only configuration
+data. They contain no real connection details, camera names, credentials, or
+event history.
+
+![Privacy-safe FriedasBirdview activity-popup preview with Frieda in a twilight garden](docs/images/friedasbirdview-popup-preview.png)
 
 ## What it does
 
@@ -104,7 +108,7 @@ cmake --install build --prefix /your/chosen/prefix
 
 ## First-time setup
 
-![FriedasBirdview Settings](resources/FriedasBirdview-Settings.png)
+![Privacy-safe FriedasBirdview settings preview showing the Event delivery MQTT tab](docs/images/friedasbirdview-settings-preview.png)
 
 1. Start **FriedasBirdview** and open its tray icon’s **Settings**. Settings
    are grouped into compact **General**, **Feed & alerts**, **Triggers**,
